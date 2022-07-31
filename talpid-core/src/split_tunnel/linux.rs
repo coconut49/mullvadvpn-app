@@ -7,6 +7,7 @@ use talpid_types::cgroup::{find_net_cls_mount, SPLIT_TUNNEL_CGROUP_NAME};
 
 const DEFAULT_NET_CLS_DIR: &str = "/sys/fs/cgroup/net_cls";
 const NET_CLS_DIR_OVERRIDE_ENV_VAR: &str = "TALPID_NET_CLS_MOUNT_DIR";
+const DISABLE_SPLIT_TUNNEL_ENV_VAR: &str = "TALPID_DISABLE_SPLIT_TUNNEL";
 
 /// Identifies packets coming from the cgroup.
 /// This should be an arbitrary but unique integer.
@@ -46,6 +47,9 @@ pub enum Error {
     /// Unable to read /proc/mounts
     #[error(display = "Failed to read /proc/mounts")]
     ListMounts(#[error(source)] io::Error),
+
+    #[error(display = "Split Tunnel is not supported")]
+    SplitTunnelDisabled,
 }
 
 /// Manages PIDs in the Linux Cgroup excluded from the VPN tunnel.
@@ -59,11 +63,19 @@ impl PidManager {
     /// Finds the corresponding Cgroup to use. Will mount a `net_cls` filesystem
     /// if none exists.
     pub fn new() -> Result<PidManager, Error> {
+        if Self::disable_split_tunnel() {
+            return Ok(PidManager { net_cls_path: PathBuf::new() });
+        }
+
         let manager = PidManager {
             net_cls_path: Self::create_cgroup()?,
         };
         manager.setup_exclusion_group()?;
         Ok(manager)
+    }
+
+    fn disable_split_tunnel() -> bool {
+        env::var(DISABLE_SPLIT_TUNNEL_ENV_VAR).is_ok()
     }
 
     /// Set up cgroup used to track PIDs for split tunneling.
@@ -88,7 +100,7 @@ impl PidManager {
             nix::mount::MsFlags::empty(),
             Some("net_cls"),
         )
-        .map_err(Error::InitNetClsCGroup)?;
+            .map_err(Error::InitNetClsCGroup)?;
 
         Ok(net_cls_dir)
     }
@@ -106,6 +118,10 @@ impl PidManager {
 
     /// Add a PID to the Cgroup to have it excluded from the tunnel.
     pub fn add(&self, pid: i32) -> Result<(), Error> {
+        if Self::disable_split_tunnel() {
+            return Err(Error::SplitTunnelDisabled);
+        }
+
         let exclusions_path = self
             .net_cls_path
             .join(SPLIT_TUNNEL_CGROUP_NAME)
@@ -123,6 +139,10 @@ impl PidManager {
 
     /// Remove a PID from the Cgroup to have it included in the tunnel.
     pub fn remove(&self, pid: i32) -> Result<(), Error> {
+        if Self::disable_split_tunnel() {
+            return Err(Error::SplitTunnelDisabled);
+        }
+
         // FIXME: We remove PIDs from our cgroup here by adding
         //        them to the parent cgroup. This seems wrong.
         let exclusions_path = self.net_cls_path.join("cgroup.procs");
@@ -139,6 +159,10 @@ impl PidManager {
 
     /// Return a list of all PIDs currently in the Cgroup excluded from the tunnel.
     pub fn list(&self) -> Result<Vec<i32>, Error> {
+        if Self::disable_split_tunnel() {
+            return Err(Error::SplitTunnelDisabled);
+        }
+
         let exclusions_path = self
             .net_cls_path
             .join(SPLIT_TUNNEL_CGROUP_NAME)
