@@ -11,17 +11,22 @@ use std::{path::PathBuf, thread, time::Duration};
 use talpid_types::ErrorExt;
 
 mod cli;
+#[cfg(target_os = "linux")]
+mod early_boot_firewall;
 mod exception_logging;
-mod shutdown;
+#[cfg(target_os = "macos")]
+mod macos_launch_daemon;
 #[cfg(windows)]
 mod system_service;
 
 const DAEMON_LOG_FILENAME: &str = "daemon.log";
+#[cfg(target_os = "linux")]
+const EARLY_BOOT_LOG_FILENAME: &str = "early-boot-fw.log";
 
 fn main() {
     let config = cli::get_config();
-    let log_dir = init_logging(config).unwrap_or_else(|error| {
-        eprintln!("{}", error);
+    let log_dir = init_daemon_logging(config).unwrap_or_else(|error| {
+        eprintln!("{error}");
         std::process::exit(1)
     });
 
@@ -43,10 +48,43 @@ fn main() {
     std::process::exit(exit_code);
 }
 
-fn init_logging(config: &cli::Config) -> Result<Option<PathBuf>, String> {
-    let log_dir = get_log_dir(config)?;
-    let log_file = log_dir.as_ref().map(|dir| dir.join(DAEMON_LOG_FILENAME));
+fn init_daemon_logging(config: &cli::Config) -> Result<Option<PathBuf>, String> {
+    #[cfg(target_os = "linux")]
+    if config.initialize_firewall_and_exit {
+        init_early_boot_logging(config);
+        return Ok(None);
+    }
 
+    #[cfg(target_os = "macos")]
+    if config.launch_daemon_status {
+        return Ok(None);
+    }
+
+    let log_dir = get_log_dir(config)?;
+    let log_path = |filename| log_dir.as_ref().map(|dir| dir.join(filename));
+
+    init_logger(config, log_path(DAEMON_LOG_FILENAME))?;
+
+    if let Some(ref log_dir) = log_dir {
+        log::info!("Logging to {}", log_dir.display());
+    }
+    Ok(log_dir)
+}
+
+#[cfg(target_os = "linux")]
+fn init_early_boot_logging(config: &cli::Config) {
+    // If it's possible to log to the filesystem - attempt to do so, but failing that mustn't stop
+    // the daemon from starting here.
+    if let Ok(Some(log_dir)) = get_log_dir(config) {
+        if init_logger(config, Some(log_dir.join(EARLY_BOOT_LOG_FILENAME))).is_ok() {
+            return;
+        }
+    }
+
+    let _ = init_logger(config, None);
+}
+
+fn init_logger(config: &cli::Config, log_file: Option<PathBuf>) -> Result<(), String> {
     logging::init_logger(
         config.log_level,
         log_file.as_ref(),
@@ -56,10 +94,7 @@ fn init_logging(config: &cli::Config) -> Result<Option<PathBuf>, String> {
     log_panics::init();
     exception_logging::enable();
     version::log_version();
-    if let Some(ref log_dir) = log_dir {
-        log::info!("Logging to {}", log_dir.display());
-    }
-    Ok(log_dir)
+    Ok(())
 }
 
 fn get_log_dir(config: &cli::Config) -> Result<Option<PathBuf>, String> {
@@ -76,12 +111,6 @@ fn get_log_dir(config: &cli::Config) -> Result<Option<PathBuf>, String> {
 async fn run_platform(config: &cli::Config, log_dir: Option<PathBuf>) -> Result<(), String> {
     if config.run_as_service {
         system_service::run()
-    } else if config.restart_service {
-        let restart_result = system_service::restart_service().map_err(|e| e.display_chain());
-        if restart_result.is_ok() {
-            log::info!("Restarted the service.");
-        }
-        restart_result
     } else {
         if config.register_service {
             let install_result = system_service::install_service().map_err(|e| e.display_chain());
@@ -95,7 +124,25 @@ async fn run_platform(config: &cli::Config, log_dir: Option<PathBuf>) -> Result<
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+async fn run_platform(config: &cli::Config, log_dir: Option<PathBuf>) -> Result<(), String> {
+    if config.initialize_firewall_and_exit {
+        return crate::early_boot_firewall::initialize_firewall()
+            .await
+            .map_err(|err| format!("{err}"));
+    }
+    run_standalone(log_dir).await
+}
+
+#[cfg(target_os = "macos")]
+async fn run_platform(config: &cli::Config, log_dir: Option<PathBuf>) -> Result<(), String> {
+    if config.launch_daemon_status {
+        std::process::exit(macos_launch_daemon::get_status() as i32);
+    }
+    run_standalone(log_dir).await
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 async fn run_platform(_config: &cli::Config, log_dir: Option<PathBuf>) -> Result<(), String> {
     run_standalone(log_dir).await
 }
@@ -119,7 +166,14 @@ async fn run_standalone(log_dir: Option<PathBuf>) -> Result<(), String> {
     let daemon = create_daemon(log_dir).await?;
 
     let shutdown_handle = daemon.shutdown_handle();
-    shutdown::set_shutdown_signal_handler(move || shutdown_handle.shutdown())
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    mullvad_daemon::shutdown::set_shutdown_signal_handler(move || {
+        shutdown_handle.shutdown(!mullvad_daemon::shutdown::is_shutdown_user_initiated())
+    })
+    .map_err(|e| e.display_chain())?;
+
+    #[cfg(any(windows, target_os = "android"))]
+    mullvad_daemon::shutdown::set_shutdown_signal_handler(move || shutdown_handle.shutdown(true))
         .map_err(|e| e.display_chain())?;
 
     daemon.run().await.map_err(|e| e.display_chain())?;

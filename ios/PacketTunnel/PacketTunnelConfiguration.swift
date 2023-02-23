@@ -7,10 +7,13 @@
 //
 
 import Foundation
-import WireGuardKit
+import MullvadTypes
 import protocol Network.IPAddress
+import RelaySelector
+import WireGuardKit
 
 struct PacketTunnelConfiguration {
+    var deviceState: DeviceState
     var tunnelSettings: TunnelSettingsV2
     var selectorResult: RelaySelectorResult
 }
@@ -29,20 +32,24 @@ extension PacketTunnelConfiguration {
             peerConfig.endpoint = endpoint
             peerConfig.allowedIPs = [
                 IPAddressRange(from: "0.0.0.0/0")!,
-                IPAddressRange(from: "::/0")!
+                IPAddressRange(from: "::/0")!,
             ]
             return peerConfig
         }
 
-        var interfaceConfig = InterfaceConfiguration(
-            privateKey: tunnelSettings.device.wgKeyData.privateKey
-        )
+        var interfaceConfig: InterfaceConfiguration
+
+        switch deviceState {
+        case let .loggedIn(_, device):
+            interfaceConfig = InterfaceConfiguration(privateKey: device.wgKeyData.privateKey)
+            interfaceConfig.addresses = [device.ipv4Address, device.ipv6Address]
+            interfaceConfig.dns = dnsServers.map { DNSServer(address: $0) }
+
+        case .loggedOut, .revoked:
+            interfaceConfig = InterfaceConfiguration(privateKey: PrivateKey())
+        }
+
         interfaceConfig.listenPort = 0
-        interfaceConfig.dns = dnsServers.map { DNSServer(address: $0) }
-        interfaceConfig.addresses = [
-            tunnelSettings.device.ipv4Address,
-            tunnelSettings.device.ipv6Address
-        ]
 
         return TunnelConfiguration(name: nil, interface: interfaceConfig, peers: peerConfigs)
     }

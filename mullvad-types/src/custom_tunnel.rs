@@ -51,14 +51,16 @@ impl CustomTunnelEndpoint {
         let parameters = match config {
             ConnectionConfig::OpenVpn(config) => openvpn::TunnelParameters {
                 config,
-                options: tunnel_options.openvpn.clone(),
+                options: tunnel_options.openvpn,
                 generic_options: tunnel_options.generic,
                 proxy,
+                #[cfg(target_os = "linux")]
+                fwmark: crate::TUNNEL_FWMARK,
             }
             .into(),
             ConnectionConfig::Wireguard(connection) => wireguard::TunnelParameters {
                 connection,
-                options: tunnel_options.wireguard.options.clone(),
+                options: tunnel_options.wireguard.into_talpid_tunnel_options(),
                 generic_options: tunnel_options.generic,
                 obfuscation: None,
             }

@@ -14,17 +14,20 @@ protocol SettingsViewControllerDelegate: AnyObject {
     func settingsViewControllerDidFinish(_ controller: SettingsViewController)
 }
 
-class SettingsViewController: UITableViewController, SettingsDataSourceDelegate, SFSafariViewControllerDelegate {
-
+class SettingsViewController: UITableViewController, SettingsDataSourceDelegate,
+    SFSafariViewControllerDelegate
+{
     weak var delegate: SettingsViewControllerDelegate?
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
         return .lightContent
     }
 
-    private let dataSource = SettingsDataSource()
+    private let dataSource: SettingsDataSource
 
-    init() {
+    init(interactor: SettingsInteractor) {
+        dataSource = SettingsDataSource(interactor: interactor)
+
         super.init(style: .grouped)
     }
 
@@ -41,8 +44,11 @@ class SettingsViewController: UITableViewController, SettingsDataSourceDelegate,
             value: "Settings",
             comment: ""
         )
-        navigationItem.largeTitleDisplayMode = .always
-        navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(handleDismiss))
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            barButtonSystemItem: .done,
+            target: self,
+            action: #selector(handleDismiss)
+        )
 
         tableView.backgroundColor = .secondaryColor
         tableView.separatorColor = .secondaryColor
@@ -61,13 +67,19 @@ class SettingsViewController: UITableViewController, SettingsDataSourceDelegate,
 
     // MARK: - SettingsDataSourceDelegate
 
-    func settingsDataSource(_ dataSource: SettingsDataSource, didSelectItem item: SettingsDataSource.Item) {
+    func settingsDataSource(
+        _ dataSource: SettingsDataSource,
+        didSelectItem item: SettingsDataSource.Item
+    ) {
         if let route = item.navigationRoute {
             let settingsNavigationController = navigationController as? SettingsNavigationController
 
             settingsNavigationController?.navigate(to: route, animated: true)
         } else if case .faq = item {
-            let safariViewController = SFSafariViewController(url: ApplicationConfiguration.faqAndGuidesURL)
+            let safariViewController = SFSafariViewController(
+                url: ApplicationConfiguration
+                    .faqAndGuidesURL
+            )
             safariViewController.delegate = self
 
             present(safariViewController, animated: true)
@@ -92,8 +104,6 @@ extension SettingsDataSource.Item {
             return .account
         case .preferences:
             return .preferences
-        case .wireguardKey:
-            return .wireguardKeys
         case .version:
             return nil
         case .problemReport:

@@ -6,7 +6,7 @@ import { AccountToken } from '../../shared/daemon-rpc-types';
 import { messages } from '../../shared/gettext';
 import { useAppContext } from '../context';
 import { formatAccountToken } from '../lib/account';
-import { formatMarkdown } from '../markdown-formatter';
+import { formatHtml } from '../lib/html-formatter';
 import { LoginState } from '../redux/account/reducers';
 import { useSelector } from '../redux/store';
 import Accordion from './Accordion';
@@ -79,8 +79,7 @@ export default class Login extends React.Component<IProps, IState> {
   public componentDidUpdate(prevProps: IProps, _prevState: IState) {
     if (
       this.props.loginState.type !== prevProps.loginState.type &&
-      this.props.loginState.type === 'failed' &&
-      !this.shouldResetLoginError
+      this.props.loginState.type === 'failed'
     ) {
       this.shouldResetLoginError = true;
 
@@ -333,7 +332,7 @@ export default class Login extends React.Component<IProps, IState> {
     return (
       <>
         <StyledLoginFooterPrompt>
-          {messages.pgettext('login-view', "Don't have an account number?")}
+          {messages.pgettext('login-view', 'Don’t have an account number?')}
         </StyledLoginFooterPrompt>
         <AppButton.BlueButton
           onClick={this.props.createNewAccount}
@@ -380,7 +379,7 @@ function AccountDropdownItem(props: IAccountDropdownItemProps) {
   }, [props.onSelect, props.value]);
 
   const handleRemove = useCallback(
-    (event) => {
+    (event: React.MouseEvent<HTMLButtonElement>) => {
       // Prevent login form from submitting
       event.preventDefault();
       props.onRemove(props.value);
@@ -442,19 +441,19 @@ function BlockMessage() {
     }
   }, [blockWhenDisconnected, tunnelState, setBlockWhenDisconnected, disconnectTunnel]);
 
-  const alwaysRequireVpnSettingsName = messages.pgettext('vpn-settings-view', 'Lockdown mode');
-  const message = formatMarkdown(
+  const lockdownModeSettingName = messages.pgettext('vpn-settings-view', 'Lockdown mode');
+  const message = formatHtml(
     blockWhenDisconnected
       ? sprintf(
           // TRANSLATORS: This is a warning message shown when the app is blocking the users
           // TRANSLATORS: internet connection while logged out.
           // TRANSLATORS: Available placeholder:
-          // TRANSLATORS: %(alwaysRequireVpnSettingsName)s - The translation of "Always require VPN"
+          // TRANSLATORS: %(lockdownModeSettingName)s - The translation of "Lockdown mode"
           messages.pgettext(
             'login-view',
-            '**%(alwaysRequireVpnSettingsName)s** is enabled. Disable it to unblock your connection.',
+            '<b>%(lockdownModeSettingName)s</b> is enabled. Disable it to unblock your connection.',
           ),
-          { alwaysRequireVpnSettingsName },
+          { lockdownModeSettingName },
         )
       : // This makes the translator comment appear on it's own line.
         // TRANSLATORS: This is a warning message shown when the app is blocking the users

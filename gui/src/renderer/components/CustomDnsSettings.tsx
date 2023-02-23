@@ -4,6 +4,7 @@ import { sprintf } from 'sprintf-js';
 import { colors, strings } from '../../config.json';
 import { messages } from '../../shared/gettext';
 import { useAppContext } from '../context';
+import { formatHtml } from '../lib/html-formatter';
 import { IpAddress } from '../lib/ip';
 import { useBoolean, useMounted } from '../lib/utilityHooks';
 import { useSelector } from '../redux/store';
@@ -283,20 +284,20 @@ export default function CustomDnsSettings() {
       </Accordion>
 
       <StyledCustomDnsFooter>
-        <Cell.FooterText>
+        <Cell.CellFooterText>
           {featureAvailable
             ? messages.pgettext('vpn-settings-view', 'Enable to add at least one DNS server.')
-            : // This line makes sure that the next one isn't prefixed by the color.
-              // TRANSLATORS: This is displayed when either or both of the block ads/trackers settings are
-              // TRANSLATORS: turned on which makes the custom DNS setting disabled. The text enclosed in "**"
-              // TRANSLATORS: will appear bold.
-              // TRANSLATORS: Available placeholders:
-              // TRANSLATORS: %(preferencesPageName)s - The page title showed on top in the preferences page.
-              messages.pgettext(
-                'vpn-settings-view',
-                'Disable all content blockers to activate this setting.',
+            : formatHtml(
+                // TRANSLATORS: This is displayed when either or both of the block ads/trackers settings are
+                // TRANSLATORS: turned on which makes the custom DNS setting disabled.
+                // TRANSLATORS: Available placeholders:
+                // TRANSLATORS: %(preferencesPageName)s - The page title showed on top in the preferences page.
+                messages.pgettext(
+                  'vpn-settings-view',
+                  'Disable all <b>DNS content blockers</b> above to activate this setting.',
+                ),
               )}
-        </Cell.FooterText>
+        </Cell.CellFooterText>
       </StyledCustomDnsFooter>
 
       <ConfirmationDialog

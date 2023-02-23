@@ -11,6 +11,7 @@ import {
 } from '../../shared/daemon-rpc-types';
 import { messages } from '../../shared/gettext';
 import log from '../../shared/logging';
+import { removeNonNumericCharacters } from '../../shared/string-helpers';
 import { useAppContext } from '../context';
 import { createWireguardRelayUpdater } from '../lib/constraint-updater';
 import { useHistory } from '../lib/history';
@@ -19,7 +20,7 @@ import { useSelector } from '../redux/store';
 import * as AppButton from './AppButton';
 import { AriaDescription, AriaInput, AriaInputGroup, AriaLabel } from './AriaGroup';
 import * as Cell from './cell';
-import Selector, { ISelectorItem } from './cell/Selector';
+import Selector, { SelectorItem, SelectorWithCustomItem } from './cell/Selector';
 import { InfoIcon } from './InfoButton';
 import { BackAction } from './KeyboardNavigation';
 import { Layout, SettingsContainer } from './Layout';
@@ -38,10 +39,7 @@ const MAX_WIREGUARD_MTU_VALUE = 1420;
 const WIREUGARD_UDP_PORTS = [51820, 53];
 const UDP2TCP_PORTS = [80, 443, 5001];
 
-type OptionalPort = number | undefined;
-type OptionalIpVersion = IpVersion | undefined;
-
-function mapPortToSelectorItem(value: number): ISelectorItem<number> {
+function mapPortToSelectorItem(value: number): SelectorItem<number> {
   return { label: value.toString(), value };
 }
 
@@ -109,6 +107,10 @@ export default function WireguardSettings() {
                 </Cell.Group>
 
                 <Cell.Group>
+                  <QuantumResistantSetting />
+                </Cell.Group>
+
+                <Cell.Group>
                   <MultihopSetting />
                 </Cell.Group>
 
@@ -131,26 +133,23 @@ export default function WireguardSettings() {
 function PortSelector() {
   const relaySettings = useSelector((state) => state.settings.relaySettings);
   const { updateRelaySettings } = useAppContext();
+  const allowedPortRanges = useSelector((state) => state.settings.wireguardEndpointData.portRanges);
 
-  const wireguardPortItems = useMemo(() => {
-    const automaticPort: ISelectorItem<OptionalPort> = {
-      label: messages.gettext('Automatic'),
-      value: undefined,
-    };
-
-    return [automaticPort].concat(WIREUGARD_UDP_PORTS.map(mapPortToSelectorItem));
-  }, []);
+  const wireguardPortItems = useMemo<Array<SelectorItem<number>>>(
+    () => WIREUGARD_UDP_PORTS.map(mapPortToSelectorItem),
+    [],
+  );
 
   const port = useMemo(() => {
-    const port = 'normal' in relaySettings ? relaySettings.normal.wireguard.port : undefined;
-    return port === 'any' ? undefined : port;
+    const port = 'normal' in relaySettings ? relaySettings.normal.wireguard.port : 'any';
+    return port === 'any' ? null : port;
   }, [relaySettings]);
 
   const setWireguardPort = useCallback(
-    async (port?: number) => {
+    async (port: number | null) => {
       const relayUpdate = createWireguardRelayUpdater(relaySettings)
         .tunnel.wireguard((wireguard) => {
-          if (port) {
+          if (port !== null) {
             wireguard.port.exact(port);
           } else {
             wireguard.port.any();
@@ -167,30 +166,53 @@ function PortSelector() {
     [relaySettings],
   );
 
+  const parseValue = useCallback((port: string) => parseInt(port), []);
+
+  const validateValue = useCallback(
+    (value: number) => allowedPortRanges.some(([start, end]) => value >= start && value <= end),
+    [allowedPortRanges],
+  );
+
+  const portRangesText = allowedPortRanges
+    .map(([start, end]) => (start === end ? start : `${start}-${end}`))
+    .join(', ');
+
   return (
     <AriaInputGroup>
       <StyledSelectorContainer>
-        <Selector
+        <SelectorWithCustomItem
           // TRANSLATORS: The title for the WireGuard port selector.
           title={messages.pgettext('wireguard-settings-view', 'Port')}
-          values={wireguardPortItems}
+          items={wireguardPortItems}
           value={port}
           onSelect={setWireguardPort}
+          inputPlaceholder={messages.pgettext('wireguard-settings-view', 'Port')}
+          automaticValue={null}
+          parseValue={parseValue}
+          modifyValue={removeNonNumericCharacters}
+          validateValue={validateValue}
+          maxLength={5}
+          details={
+            <>
+              <ModalMessage>
+                {messages.pgettext(
+                  'wireguard-settings-view',
+                  'The automatic setting will randomly choose from the valid port ranges shown below.',
+                )}
+              </ModalMessage>
+              <ModalMessage>
+                {sprintf(
+                  messages.pgettext(
+                    'wireguard-settings-view',
+                    'The custom port can be any value inside the valid ranges: %(portRanges)s.',
+                  ),
+                  { portRanges: portRangesText },
+                )}
+              </ModalMessage>
+            </>
+          }
         />
       </StyledSelectorContainer>
-      <Cell.Footer>
-        <AriaDescription>
-          <Cell.FooterText>
-            {
-              // TRANSLATORS: The hint displayed below the WireGuard port selector.
-              messages.pgettext(
-                'wireguard-settings-view',
-                'The automatic setting will randomly choose from a wide range of ports.',
-              )
-            }
-          </Cell.FooterText>
-        </AriaDescription>
-      </Cell.Footer>
     </AriaInputGroup>
   );
 }
@@ -200,12 +222,8 @@ function ObfuscationSettings() {
   const obfuscationSettings = useSelector((state) => state.settings.obfuscationSettings);
 
   const obfuscationType = obfuscationSettings.selectedObfuscation;
-  const obfuscationTypeItems: ISelectorItem<ObfuscationType>[] = useMemo(
+  const obfuscationTypeItems: SelectorItem<ObfuscationType>[] = useMemo(
     () => [
-      {
-        label: messages.gettext('Automatic'),
-        value: ObfuscationType.auto,
-      },
       {
         label: messages.pgettext('wireguard-settings-view', 'On (UDP-over-TCP)'),
         value: ObfuscationType.udp2tcp,
@@ -242,9 +260,10 @@ function ObfuscationSettings() {
               )}
             </ModalMessage>
           }
-          values={obfuscationTypeItems}
+          items={obfuscationTypeItems}
           value={obfuscationType}
           onSelect={selectObfuscationType}
+          automaticValue={ObfuscationType.auto}
         />
       </StyledSelectorContainer>
     </AriaInputGroup>
@@ -256,14 +275,12 @@ function Udp2tcpPortSetting() {
   const obfuscationSettings = useSelector((state) => state.settings.obfuscationSettings);
 
   const port = liftConstraint(obfuscationSettings.udp2tcpSettings.port);
-  const portItems: ISelectorItem<LiftedConstraint<number>>[] = useMemo(() => {
-    const automaticItem: ISelectorItem<LiftedConstraint<number>> = {
-      label: messages.gettext('Automatic'),
-      value: 'any',
-    };
+  const portItems: SelectorItem<number>[] = useMemo(
+    () => UDP2TCP_PORTS.map(mapPortToSelectorItem),
+    [],
+  );
 
-    return [automaticItem].concat(UDP2TCP_PORTS.map(mapPortToSelectorItem));
-  }, []);
+  const expandableProps = useMemo(() => ({ expandable: true, id: 'udp2tcp-port' }), []);
 
   const selectPort = useCallback(
     async (port: LiftedConstraint<number>) => {
@@ -292,12 +309,13 @@ function Udp2tcpPortSetting() {
               )}
             </ModalMessage>
           }
-          values={portItems}
+          items={portItems}
           value={port}
           onSelect={selectPort}
           disabled={obfuscationSettings.selectedObfuscation === ObfuscationType.off}
-          expandable
+          expandable={expandableProps}
           thinTitle
+          automaticValue={'any' as const}
         />
       </StyledSelectorContainer>
     </AriaInputGroup>
@@ -359,9 +377,9 @@ function MultihopSetting() {
             <Cell.Switch isOn={multihop} onChange={setMultihop} />
           </AriaInput>
         </Cell.Container>
-        <Cell.Footer>
+        <Cell.CellFooter>
           <AriaDescription>
-            <Cell.FooterText>
+            <Cell.CellFooterText>
               {sprintf(
                 // TRANSLATORS: Description for multihop settings toggle.
                 // TRANSLATORS: Available placeholders:
@@ -372,9 +390,9 @@ function MultihopSetting() {
                 ),
                 { wireguard: strings.wireguard },
               )}
-            </Cell.FooterText>
+            </Cell.CellFooterText>
           </AriaDescription>
-        </Cell.Footer>
+        </Cell.CellFooter>
       </AriaInputGroup>
       <ModalAlert
         isOpen={confirmationDialogVisible}
@@ -401,17 +419,12 @@ function IpVersionSetting() {
   const { updateRelaySettings } = useAppContext();
   const relaySettings = useSelector((state) => state.settings.relaySettings);
   const ipVersion = useMemo(() => {
-    const ipVersion =
-      'normal' in relaySettings ? relaySettings.normal.wireguard.ipVersion : undefined;
-    return ipVersion === 'any' ? undefined : ipVersion;
+    const ipVersion = 'normal' in relaySettings ? relaySettings.normal.wireguard.ipVersion : 'any';
+    return ipVersion === 'any' ? null : ipVersion;
   }, [relaySettings]);
 
-  const ipVersionItems: ISelectorItem<OptionalIpVersion>[] = useMemo(
+  const ipVersionItems: SelectorItem<IpVersion>[] = useMemo(
     () => [
-      {
-        label: messages.gettext('Automatic'),
-        value: undefined,
-      },
       {
         label: messages.gettext('IPv4'),
         value: 'ipv4',
@@ -425,10 +438,10 @@ function IpVersionSetting() {
   );
 
   const setIpVersion = useCallback(
-    async (ipVersion?: IpVersion) => {
+    async (ipVersion: IpVersion | null) => {
       const relayUpdate = createWireguardRelayUpdater(relaySettings)
         .tunnel.wireguard((wireguard) => {
-          if (ipVersion) {
+          if (ipVersion !== null) {
             wireguard.ipVersion.exact(ipVersion);
           } else {
             wireguard.ipVersion.any();
@@ -451,14 +464,15 @@ function IpVersionSetting() {
         <Selector
           // TRANSLATORS: The title for the WireGuard IP version selector.
           title={messages.pgettext('wireguard-settings-view', 'IP version')}
-          values={ipVersionItems}
+          items={ipVersionItems}
           value={ipVersion}
           onSelect={setIpVersion}
+          automaticValue={null}
         />
       </StyledSelectorContainer>
-      <Cell.Footer>
+      <Cell.CellFooter>
         <AriaDescription>
-          <Cell.FooterText>
+          <Cell.CellFooterText>
             {sprintf(
               // TRANSLATORS: The hint displayed below the WireGuard IP version selector.
               // TRANSLATORS: Available placeholders:
@@ -469,15 +483,11 @@ function IpVersionSetting() {
               ),
               { wireguard: strings.wireguard },
             )}
-          </Cell.FooterText>
+          </Cell.CellFooterText>
         </AriaDescription>
-      </Cell.Footer>
+      </Cell.CellFooter>
     </AriaInputGroup>
   );
-}
-
-function removeNonNumericCharacters(value: string) {
-  return value.replace(/[^0-9]/g, '');
 }
 
 function mtuIsValid(mtu: string): boolean {
@@ -522,7 +532,7 @@ function MtuSetting() {
         </AriaLabel>
         <AriaInput>
           <Cell.AutoSizingTextInput
-            value={mtu ? mtu.toString() : ''}
+            initialValue={mtu ? mtu.toString() : ''}
             inputMode={'numeric'}
             maxLength={4}
             placeholder={messages.gettext('Default')}
@@ -533,9 +543,9 @@ function MtuSetting() {
           />
         </AriaInput>
       </Cell.Container>
-      <Cell.Footer>
+      <Cell.CellFooter>
         <AriaDescription>
-          <Cell.FooterText>
+          <Cell.CellFooterText>
             {sprintf(
               // TRANSLATORS: The hint displayed below the WireGuard MTU input field.
               // TRANSLATORS: Available placeholders:
@@ -552,9 +562,70 @@ function MtuSetting() {
                 max: MAX_WIREGUARD_MTU_VALUE,
               },
             )}
-          </Cell.FooterText>
+          </Cell.CellFooterText>
         </AriaDescription>
-      </Cell.Footer>
+      </Cell.CellFooter>
+    </AriaInputGroup>
+  );
+}
+
+function QuantumResistantSetting() {
+  const { setWireguardQuantumResistant } = useAppContext();
+  const quantumResistant = useSelector((state) => state.settings.wireguard.quantumResistant);
+
+  const items: SelectorItem<boolean>[] = useMemo(
+    () => [
+      {
+        label: messages.gettext('On'),
+        value: true,
+      },
+      {
+        label: messages.gettext('Off'),
+        value: false,
+      },
+    ],
+    [],
+  );
+
+  const selectQuantumResistant = useCallback(
+    async (quantumResistant: boolean | null) => {
+      await setWireguardQuantumResistant(quantumResistant ?? undefined);
+    },
+    [setWireguardQuantumResistant],
+  );
+
+  return (
+    <AriaInputGroup>
+      <StyledSelectorContainer>
+        <Selector
+          title={
+            // TRANSLATORS: The title for the WireGuard quantum resistance selector. This setting
+            // TRANSLATORS: makes the cryptography resistant to the future abilities of quantum
+            // TRANSLATORS: computers.
+            messages.pgettext('wireguard-settings-view', 'Quantum-resistant tunnel')
+          }
+          details={
+            <>
+              <ModalMessage>
+                {messages.pgettext(
+                  'wireguard-settings-view',
+                  'This feature makes the WireGuard tunnel resistant to potential attacks from quantum computers.',
+                )}
+              </ModalMessage>
+              <ModalMessage>
+                {messages.pgettext(
+                  'wireguard-settings-view',
+                  'It does this by performing an extra key exchange using a quantum safe algorithm and mixing the result into WireGuard’s regular encryption. This extra step uses approximately 500 kiB of traffic every time a new tunnel is established.',
+                )}
+              </ModalMessage>
+            </>
+          }
+          items={items}
+          value={quantumResistant ?? null}
+          onSelect={selectQuantumResistant}
+          automaticValue={null}
+        />
+      </StyledSelectorContainer>
     </AriaInputGroup>
   );
 }

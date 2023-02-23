@@ -48,7 +48,7 @@ pub enum SelectedObfuscation {
 
 // ======================================================
 
-pub(crate) struct MigrationData {
+pub struct MigrationData {
     pub token: AccountToken,
     pub wg_data: Option<serde_json::Value>,
 }
@@ -57,7 +57,7 @@ pub(crate) struct MigrationData {
 ///
 /// The ability to disable WireGuard multihop while preserving the entry location was added.
 /// So a new field, `use_multihop` is introduced. We want this to default to `true` iff:
-///  * `use_mulithop` was not present in the settings
+///  * `use_multihop` was not present in the settings
 ///  * A multihop entry location had been previously specified.
 ///
 /// It is also no longer valid to have `entry_location` set to null. So remove the field if it
@@ -68,10 +68,13 @@ pub(crate) struct MigrationData {
 /// Additionally, the WireGuard protocol constraint, if set to be using TCP, is migrated into
 /// having an active Udp2Tcp obfuscator. The protocol constraint is then removed from WireGuard
 /// settings since all WireGuard traffic is UDP.
-pub(crate) async fn migrate(settings: &mut serde_json::Value) -> Result<Option<MigrationData>> {
+pub fn migrate(settings: &mut serde_json::Value) -> Result<Option<MigrationData>> {
     if !version_matches(settings) {
         return Ok(None);
     }
+
+    log::info!("Migrating settings format to V6");
+
     if let Some(wireguard_constraints) = get_wireguard_constraints(settings) {
         if let Some(location) = wireguard_constraints.get("entry_location") {
             if wireguard_constraints.get("use_multihop").is_none() {
@@ -79,7 +82,7 @@ pub(crate) async fn migrate(settings: &mut serde_json::Value) -> Result<Option<M
                     // "Null" is no longer valid. It is not an option.
                     wireguard_constraints
                         .as_object_mut()
-                        .ok_or(Error::NoMatchingVersion)?
+                        .ok_or(Error::InvalidSettingsContent)?
                         .remove("entry_location");
                 } else {
                     wireguard_constraints["use_multihop"] = serde_json::json!(true);
@@ -95,7 +98,7 @@ pub(crate) async fn migrate(settings: &mut serde_json::Value) -> Result<Option<M
         //
         if let Some(port) = wireguard_constraints.get("port") {
             let port_constraint: Constraint<TransportPort> =
-                serde_json::from_value(port.clone()).map_err(Error::Parse)?;
+                serde_json::from_value(port.clone()).map_err(|_| Error::InvalidSettingsContent)?;
             if let Some(transport_port) = port_constraint.option() {
                 let (port, obfuscation_settings) = match transport_port.protocol {
                     TransportProtocol::Udp => (serde_json::json!(transport_port.port), None),
@@ -116,7 +119,8 @@ pub(crate) async fn migrate(settings: &mut serde_json::Value) -> Result<Option<M
 
     let migration_data = if let Some(token) = settings.get("account_token").filter(|t| !t.is_null())
     {
-        let token: AccountToken = serde_json::from_value(token.clone()).map_err(Error::Parse)?;
+        let token: AccountToken =
+            serde_json::from_value(token.clone()).map_err(|_| Error::InvalidSettingsContent)?;
         let migration_data =
             if let Some(wg_data) = settings.get("wireguard").filter(|wg| !wg.is_null()) {
                 Some(MigrationData {
@@ -130,7 +134,9 @@ pub(crate) async fn migrate(settings: &mut serde_json::Value) -> Result<Option<M
                 })
             };
 
-        let settings_map = settings.as_object_mut().ok_or(Error::NoMatchingVersion)?;
+        let settings_map = settings
+            .as_object_mut()
+            .ok_or(Error::InvalidSettingsContent)?;
         settings_map.remove("account_token");
         settings_map.remove("wireguard");
 
@@ -329,7 +335,7 @@ mod test {
         let mut old_settings = serde_json::from_str(V5_SETTINGS).unwrap();
 
         assert!(version_matches(&mut old_settings));
-        migrate(&mut old_settings).await.unwrap();
+        migrate(&mut old_settings).unwrap();
         let new_settings: serde_json::Value = serde_json::from_str(V6_SETTINGS).unwrap();
 
         assert_eq!(&old_settings, &new_settings);

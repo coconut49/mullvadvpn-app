@@ -12,6 +12,28 @@ instructions document.
 [changelog]: CHANGELOG.md
 [Configure Xcode project]: BuildInstructions.md#configure-xcode-project
 
+## Code formatting
+
+The codebase is formatted using [SwiftFormat](https://github.com/nicklockwood/SwiftFormat). Please 
+format all contributions using the latest version of formatter.
+
+```
+swiftformat ios/
+```
+
+Install the latest version of SwiftFormat via Homebrew:
+
+```
+brew install swiftformat
+```
+
+CI uses the latest version available on Homebrew to check formatting, so please keep your local 
+installation up to date, if you see it complain:
+
+```
+brew upgrade swiftformat 
+```
+
 ## Screenshots for AppStore
 
 The process of taking AppStore screenshots is automated using a UI Testing bundle and Snapshot tool,
@@ -81,4 +103,15 @@ and save the output into `requirements.txt`.
 
 ```
 hashin --python 3.7 --verbose --update-all
+```
+
+## Icons and assets
+
+For a general overview of icons and graphics read [the graphics readme](../graphics/README.md).
+
+To copy graphical assets from the desktop GUI and generate iOS assets, run:
+```bash
+ios/convert-assets.rb --app-icon
+ios/convert-assets.rb --import-desktop-assets
+ios/convert-assets.rb --additional-assets
 ```

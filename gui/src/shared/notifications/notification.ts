@@ -5,7 +5,33 @@ export type NotificationAction = {
   withAuth?: boolean;
 };
 
+export interface InAppNotificationTroubleshootInfo {
+  details: string;
+  steps: string[];
+}
+
+export type InAppNotificationAction =
+  | NotificationAction
+  | {
+      type: 'troubleshoot-dialog';
+      troubleshoot: InAppNotificationTroubleshootInfo;
+    };
+
 export type InAppNotificationIndicatorType = 'success' | 'warning' | 'error';
+
+export enum SystemNotificationSeverityType {
+  info = 0,
+  low,
+  medium,
+  high,
+}
+
+export enum SystemNotificationCategory {
+  tunnelState,
+  expiry,
+  newVersion,
+  inconsistentVersion,
+}
 
 interface NotificationProvider {
   mayDisplay(): boolean;
@@ -13,7 +39,9 @@ interface NotificationProvider {
 
 export interface SystemNotification {
   message: string;
-  critical: boolean;
+  severity: SystemNotificationSeverityType;
+  category: SystemNotificationCategory;
+  throttle?: boolean;
   presentOnce?: { value: boolean; name: string };
   suppressInDevelopment?: boolean;
   action?: NotificationAction;
@@ -23,7 +51,7 @@ export interface InAppNotification {
   indicator?: InAppNotificationIndicatorType;
   title: string;
   subtitle?: string;
-  action?: NotificationAction;
+  action?: InAppNotificationAction;
 }
 
 export interface SystemNotificationProvider extends NotificationProvider {

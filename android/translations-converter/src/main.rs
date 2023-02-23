@@ -39,6 +39,7 @@ use crate::normalize::Normalize;
 use std::{
     collections::HashMap,
     fs::{self, File},
+    io::BufReader,
     path::Path,
 };
 
@@ -48,7 +49,8 @@ fn main() {
     let strings_file = File::open(resources_dir.join("values/strings.xml"))
         .expect("Failed to open string resources file");
     let string_resources: android::StringResources =
-        serde_xml_rs::from_reader(strings_file).expect("Failed to read string resources file");
+        quick_xml::de::from_reader(BufReader::new(strings_file))
+            .expect("Failed to read string resources file");
 
     let known_strings: HashMap<_, _> = string_resources
         .into_iter()
@@ -58,7 +60,8 @@ fn main() {
     let plurals_file = File::open(resources_dir.join("values/plurals.xml"))
         .expect("Failed to open plurals resources file");
     let plural_resources: android::PluralResources =
-        serde_xml_rs::from_reader(plurals_file).expect("Failed to read plural resources file");
+        quick_xml::de::from_reader(BufReader::new(plurals_file))
+            .expect("Failed to read plural resources file");
 
     let known_plurals: HashMap<_, _> = plural_resources
         .iter()
@@ -76,7 +79,7 @@ fn main() {
         .collect();
 
     let locale_dir = Path::new("../../gui/locales");
-    let locale_files = fs::read_dir(&locale_dir)
+    let locale_files = fs::read_dir(locale_dir)
         .expect("Failed to open root locale directory")
         .filter_map(|dir_entry_result| dir_entry_result.ok().map(|dir_entry| dir_entry.path()))
         .filter(|dir_entry_path| dir_entry_path.is_dir())
@@ -91,7 +94,7 @@ fn main() {
             .unwrap()
             .to_str()
             .unwrap();
-        let destination_dir = resources_dir.join(&android_locale_directory(locale));
+        let destination_dir = resources_dir.join(android_locale_directory(locale));
 
         if !destination_dir.exists() {
             fs::create_dir(&destination_dir).expect("Failed to create Android locale directory");
@@ -130,7 +133,7 @@ fn main() {
             &template_path,
             missing_translations
                 .into_iter()
-                .inspect(|(missing_translation, id)| println!("  {}: {}", id, missing_translation))
+                .inspect(|(missing_translation, id)| println!("  {id}: {missing_translation}"))
                 .map(|(id, _)| gettext::MsgEntry {
                     id: gettext::MsgString::from_unescaped(&id),
                     value: gettext::MsgString::empty().into(),

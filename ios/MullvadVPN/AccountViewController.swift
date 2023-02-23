@@ -6,47 +6,41 @@
 //  Copyright © 2019 Mullvad VPN AB. All rights reserved.
 //
 
+import MullvadLogging
+import MullvadREST
+import MullvadTypes
+import Operations
 import StoreKit
 import UIKit
-import Logging
 
 protocol AccountViewControllerDelegate: AnyObject {
     func accountViewControllerDidLogout(_ controller: AccountViewController)
 }
 
-class AccountViewController: UIViewController, AppStorePaymentObserver, TunnelObserver {
+class AccountViewController: UIViewController {
+    private let interactor: AccountInteractor
+    private let alertPresenter = AlertPresenter()
+
     private let contentView: AccountContentView = {
         let contentView = AccountContentView()
         contentView.translatesAutoresizingMaskIntoConstraints = false
         return contentView
     }()
 
-    private var copyToPasteboardWork: DispatchWorkItem?
-
-    private var pendingPayment: SKPayment?
-    private let alertPresenter = AlertPresenter()
-    private let logger = Logger(label: "AccountViewController")
+    private var productState: ProductState = .none
+    private var paymentState: PaymentState = .none
 
     weak var delegate: AccountViewControllerDelegate?
 
-    private lazy var purchaseButtonInteractionRestriction =
-        UserInterfaceInteractionRestriction { [weak self] (enableUserInteraction, _) in
-            // Make sure to disable the button if the product is not loaded
-            self?.contentView.purchaseButton.isEnabled = enableUserInteraction &&
-                self?.product != nil &&
-                AppStorePaymentManager.canMakePayments
+    init(interactor: AccountInteractor) {
+        self.interactor = interactor
+
+        super.init(nibName: nil, bundle: nil)
     }
 
-    private lazy var viewControllerInteractionRestriction =
-        UserInterfaceInteractionRestriction { [weak self] (enableUserInteraction, animated) in
-            self?.setEnableUserInteraction(enableUserInteraction, animated: true)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
-
-    private lazy var compoundInteractionRestriction =
-        CompoundUserInterfaceInteractionRestriction(restrictions: [
-            purchaseButtonInteractionRestriction, viewControllerInteractionRestriction])
-
-    private var product: SKProduct?
 
     // MARK: - View lifecycle
 
@@ -71,7 +65,8 @@ class AccountViewController: UIViewController, AppStorePaymentObserver, TunnelOb
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
             contentView.topAnchor.constraint(equalTo: scrollView.topAnchor),
-            contentView.bottomAnchor.constraint(greaterThanOrEqualTo: scrollView.safeAreaLayoutGuide.bottomAnchor),
+            contentView.bottomAnchor
+                .constraint(greaterThanOrEqualTo: scrollView.safeAreaLayoutGuide.bottomAnchor),
             contentView.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
             contentView.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
             contentView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
@@ -84,139 +79,174 @@ class AccountViewController: UIViewController, AppStorePaymentObserver, TunnelOb
             comment: ""
         )
 
-        contentView.accountTokenRowView.accountNumber = TunnelManager.shared.accountNumber
         contentView.accountTokenRowView.copyAccountNumber = { [weak self] in
             self?.copyAccountToken()
         }
 
-        contentView.restorePurchasesButton.addTarget(self, action: #selector(restorePurchases), for: .touchUpInside)
-        contentView.purchaseButton.addTarget(self, action: #selector(doPurchase), for: .touchUpInside)
+        contentView.restorePurchasesButton.addTarget(
+            self,
+            action: #selector(restorePurchases),
+            for: .touchUpInside
+        )
+        contentView.purchaseButton.addTarget(
+            self,
+            action: #selector(doPurchase),
+            for: .touchUpInside
+        )
         contentView.logoutButton.addTarget(self, action: #selector(doLogout), for: .touchUpInside)
 
-        AppStorePaymentManager.shared.addPaymentObserver(self)
-        TunnelManager.shared.addObserver(self)
+        interactor.didReceiveDeviceState = { [weak self] newDeviceState in
+            self?.updateView(from: newDeviceState)
+        }
 
-        updateAccountExpiry(expiryDate: TunnelManager.shared.accountExpiry)
-        updateDeviceName(TunnelManager.shared.device?.name)
+        interactor.didReceivePaymentEvent = { [weak self] event in
+            self?.didReceivePaymentEvent(event)
+        }
 
-        // Make sure to disable IAPs when payments are restricted
-        if AppStorePaymentManager.canMakePayments {
+        updateView(from: interactor.deviceState)
+        applyViewState(animated: false)
+
+        if StorePaymentManager.canMakePayments {
             requestStoreProducts()
         } else {
-            setPaymentsRestricted()
+            setProductState(.cannotMakePurchases, animated: false)
         }
     }
 
-    // MARK: - Private methods
-
-    private func updateDeviceName(_ deviceName: String?) {
-        contentView.accountDeviceRow.deviceName = deviceName
-    }
-
-    private func updateAccountExpiry(expiryDate: Date?) {
-        contentView.accountExpiryRowView.value = expiryDate
-    }
+    // MARK: - Private
 
     private func requestStoreProducts() {
-        let inAppPurchase = AppStoreSubscription.thirtyDays
+        let productKind = StoreSubscription.thirtyDays
 
-        contentView.purchaseButton.setTitle(inAppPurchase.localizedTitle, for: .normal)
-        contentView.purchaseButton.isLoading = true
+        setProductState(.fetching(productKind), animated: true)
 
-        purchaseButtonInteractionRestriction.increase(animated: true)
+        _ = interactor.requestProducts(with: [productKind]) { [weak self] completion in
+            let productState: ProductState = completion.value?.products.first
+                .map { .received($0) } ?? .failed
 
-        _ = AppStorePaymentManager.shared.requestProducts(with: [inAppPurchase]) { [weak self] completion in
-            guard let self = self else { return }
+            self?.setProductState(productState, animated: true)
+        }
+    }
 
-            switch completion {
-            case .success(let response):
-                if let product = response.products.first {
-                    self.setProduct(product, animated: true)
-                }
+    private func setPaymentState(_ newState: PaymentState, animated: Bool) {
+        paymentState = newState
 
-            case .failure(let error):
-                self.didFailLoadingProducts(with: error)
+        applyViewState(animated: animated)
+    }
 
-            case .cancelled:
+    private func setProductState(_ newState: ProductState, animated: Bool) {
+        productState = newState
+
+        applyViewState(animated: animated)
+    }
+
+    private func updateView(from deviceState: DeviceState?) {
+        guard case let .loggedIn(accountData, deviceData) = deviceState else {
+            return
+        }
+
+        contentView.accountDeviceRow.deviceName = deviceData.name
+        contentView.accountTokenRowView.accountNumber = accountData.number
+        contentView.accountExpiryRowView.value = accountData.expiry
+    }
+
+    private func applyViewState(animated: Bool) {
+        let isInteractionEnabled = paymentState.allowsViewInteraction
+        let purchaseButton = contentView.purchaseButton
+        let activityIndicator = contentView.accountExpiryRowView.activityIndicator
+
+        if productState.isFetching || paymentState != .none {
+            activityIndicator.startAnimating()
+        } else {
+            activityIndicator.stopAnimating()
+        }
+
+        purchaseButton.setTitle(productState.purchaseButtonTitle, for: .normal)
+        contentView.purchaseButton.isLoading = productState.isFetching
+
+        purchaseButton.isEnabled = productState.isReceived && isInteractionEnabled
+        contentView.restorePurchasesButton.isEnabled = isInteractionEnabled
+        contentView.logoutButton.isEnabled = isInteractionEnabled
+
+        view.isUserInteractionEnabled = isInteractionEnabled
+        isModalInPresentation = !isInteractionEnabled
+
+        navigationItem.setHidesBackButton(!isInteractionEnabled, animated: animated)
+    }
+
+    private func didReceivePaymentEvent(_ event: StorePaymentEvent) {
+        guard case let .makingPayment(payment) = paymentState,
+              payment == event.payment else { return }
+
+        switch event {
+        case let .finished(completion):
+            showTimeAddedConfirmationAlert(with: completion.serverResponse, context: .purchase)
+
+        case let .failure(paymentFailure):
+            switch paymentFailure.error {
+            case .storePayment(SKError.paymentCancelled):
                 break
+
+            default:
+                showPaymentErrorAlert(error: paymentFailure.error)
             }
-
-            self.contentView.purchaseButton.isLoading = false
-            self.purchaseButtonInteractionRestriction.decrease(animated: true)
         }
+
+        setPaymentState(.none, animated: true)
     }
 
-    private func setProduct(_ product: SKProduct, animated: Bool) {
-        self.product = product
-
-        let localizedTitle = product.customLocalizedTitle ?? ""
-        let localizedPrice = product.localizedPrice ?? ""
-
-        let format = NSLocalizedString(
-            "PURCHASE_BUTTON_TITLE_FORMAT",
-            tableName: "Account",
-            value: "%1$@ (%2$@)",
-            comment: ""
-        )
-        let title = String(format: format, localizedTitle, localizedPrice)
-
-        contentView.purchaseButton.setTitle(title, for: .normal)
-    }
-
-    private func didFailLoadingProducts(with error: Error) {
-        let title = NSLocalizedString(
-            "PURCHASE_BUTTON_CANNOT_CONNECT_TO_APPSTORE_LABEL",
-            tableName: "Account",
-            value: "Cannot connect to AppStore",
-            comment: ""
+    private func showPaymentErrorAlert(error: StorePaymentManagerError) {
+        let alertController = UIAlertController(
+            title: NSLocalizedString(
+                "CANNOT_COMPLETE_PURCHASE_ALERT_TITLE",
+                tableName: "Account",
+                value: "Cannot complete the purchase",
+                comment: ""
+            ),
+            message: error.displayErrorDescription,
+            preferredStyle: .alert
         )
 
-        contentView.purchaseButton.setTitle(title, for: .normal)
-    }
-
-    private func setPaymentsRestricted() {
-        let title = NSLocalizedString(
-            "PURCHASE_BUTTON_PAYMENTS_RESTRICTED_LABEL",
-            tableName: "Account",
-            value: "Payments restricted",
-            comment: ""
+        alertController.addAction(
+            UIAlertAction(
+                title: NSLocalizedString(
+                    "CANNOT_COMPLETE_PURCHASE_ALERT_OK_ACTION",
+                    tableName: "Account",
+                    value: "OK",
+                    comment: ""
+                ), style: .cancel
+            )
         )
 
-        contentView.purchaseButton.setTitle(title, for: .normal)
-        contentView.purchaseButton.isEnabled = false
+        alertPresenter.enqueue(alertController, presentingController: self)
     }
 
-    private func setEnableUserInteraction(_ enableUserInteraction: Bool, animated: Bool) {
-        // Disable all buttons
-        [contentView.restorePurchasesButton, contentView.logoutButton].forEach { (button) in
-            button?.isEnabled = enableUserInteraction
-        }
-
-        // Disable any interaction within the view
-        view.isUserInteractionEnabled = enableUserInteraction
-
-        // Prevent view controller from being swiped away by user
-        if #available(iOS 13.0, *) {
-            isModalInPresentation = !enableUserInteraction
-        } else {
-            // Fallback on earlier versions
-        }
-
-        // Hide back button in navigation bar
-        navigationItem.setHidesBackButton(!enableUserInteraction, animated: animated)
-
-        // Show/hide the spinner next to "Paid until"
-        if enableUserInteraction {
-            contentView.accountExpiryRowView.activityIndicator.stopAnimating()
-        } else {
-            contentView.accountExpiryRowView.activityIndicator.startAnimating()
-        }
+    private func showRestorePurchasesErrorAlert(error: StorePaymentManagerError) {
+        let alertController = UIAlertController(
+            title: NSLocalizedString(
+                "RESTORE_PURCHASES_FAILURE_ALERT_TITLE",
+                tableName: "Account",
+                value: "Cannot restore purchases",
+                comment: ""
+            ),
+            message: error.displayErrorDescription,
+            preferredStyle: .alert
+        )
+        alertController.addAction(
+            UIAlertAction(title: NSLocalizedString(
+                "RESTORE_PURCHASES_FAILURE_ALERT_OK_ACTION",
+                tableName: "Account",
+                value: "OK",
+                comment: ""
+            ), style: .cancel)
+        )
+        alertPresenter.enqueue(alertController, presentingController: self)
     }
 
     private func showTimeAddedConfirmationAlert(
         with response: REST.CreateApplePaymentResponse,
-        context: REST.CreateApplePaymentResponse.Context)
-    {
+        context: REST.CreateApplePaymentResponse.Context
+    ) {
         let alertController = UIAlertController(
             title: response.alertTitle(context: context),
             message: response.alertMessage(context: context),
@@ -237,55 +267,9 @@ class AccountViewController: UIViewController, AppStorePaymentObserver, TunnelOb
         alertPresenter.enqueue(alertController, presentingController: self)
     }
 
-    private func showLogoutConfirmation(animated: Bool, completion: @escaping (Bool) -> Void) {
-        let alertController = UIAlertController(
-            title: NSLocalizedString(
-                "LOGOUT_CONFIRMATION_ALERT_TITLE",
-                tableName: "Account",
-                value: "Log out",
-                comment: ""
-            ),
-            message: NSLocalizedString(
-                "LOGOUT_CONFIRMATION_ALERT_MESSAGE",
-                tableName: "Account",
-                value: "Are you sure you want to log out?\n\nThis will erase the account number from this device. It is not possible for us to recover it for you. Make sure you have your account number saved somewhere, to be able to log back in.",
-                comment: ""
-            ),
-            preferredStyle: .alert
-        )
+    // MARK: - Actions
 
-        alertController.addAction(
-            UIAlertAction(
-                title: NSLocalizedString(
-                    "LOGOUT_CONFIRMATION_ALERT_CANCEL_ACTION",
-                    tableName: "Account",
-                    value: "Cancel",
-                    comment: ""
-                ),
-                style: .cancel,
-                handler: { (alertAction) in
-                    completion(false)
-            })
-        )
-
-        alertController.addAction(
-            UIAlertAction(
-                title: NSLocalizedString(
-                    "LOGOUT_CONFIRMATION_ALERT_YES_ACTION",
-                    tableName: "Account",
-                    value: "Log out",
-                    comment: ""
-                ),
-                style: .destructive,
-                handler: { (alertAction) in
-                    completion(true)
-            })
-        )
-
-        alertPresenter.enqueue(alertController, presentingController: self)
-    }
-
-    private func confirmLogout() {
+    @objc private func doLogout() {
         let message = NSLocalizedString(
             "LOGGING_OUT_ALERT_TITLE",
             tableName: "Account",
@@ -300,7 +284,7 @@ class AccountViewController: UIViewController, AppStorePaymentObserver, TunnelOb
         )
 
         alertPresenter.enqueue(alertController, presentingController: self) {
-            TunnelManager.shared.unsetAccount {
+            self.interactor.logout {
                 DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) {
                     alertController.dismiss(animated: true) {
                         self.delegate?.accountViewControllerDidLogout(self)
@@ -310,193 +294,49 @@ class AccountViewController: UIViewController, AppStorePaymentObserver, TunnelOb
         }
     }
 
-    // MARK: - TunnelObserver
-
-    func tunnelManagerDidLoadConfiguration(_ manager: TunnelManager) {
-        // no-op
-    }
-
-    func tunnelManager(_ manager: TunnelManager, didUpdateTunnelState tunnelState: TunnelState) {
-        // no-op
-    }
-
-    func tunnelManager(_ manager: TunnelManager, didFailWithError error: TunnelManager.Error) {
-        // no-op
-    }
-
-    func tunnelManager(_ manager: TunnelManager, didUpdateTunnelSettings tunnelSettings: TunnelSettingsV2?) {
-        guard let tunnelSettings = tunnelSettings else {
+    private func copyAccountToken() {
+        guard let accountData = interactor.deviceState.accountData else {
             return
         }
 
-        updateDeviceName(tunnelSettings.device.name)
-        updateAccountExpiry(expiryDate: tunnelSettings.account.expiry)
-    }
-
-    // MARK: - AppStorePaymentObserver
-
-    func appStorePaymentManager(_ manager: AppStorePaymentManager, transaction: SKPaymentTransaction?, payment: SKPayment, accountToken: String?, didFailWithError error: AppStorePaymentManager.Error) {
-        let alertController = UIAlertController(
-            title: NSLocalizedString(
-                "CANNOT_COMPLETE_PURCHASE_ALERT_TITLE",
-                tableName: "Account",
-                value: "Cannot complete the purchase",
-                comment: ""
-            ),
-            message: error.errorChainDescription,
-            preferredStyle: .alert
-        )
-
-        alertController.addAction(
-            UIAlertAction(
-                title: NSLocalizedString(
-                    "CANNOT_COMPLETE_PURCHASE_ALERT_OK_ACTION",
-                    tableName: "Account",
-                    value: "OK",
-                    comment: ""
-                ), style: .cancel)
-        )
-
-        alertPresenter.enqueue(alertController, presentingController: self)
-
-        if payment == pendingPayment {
-            compoundInteractionRestriction.decrease(animated: true)
-        }
-    }
-
-    func appStorePaymentManager(_ manager: AppStorePaymentManager, transaction: SKPaymentTransaction, accountToken: String, didFinishWithResponse response: REST.CreateApplePaymentResponse) {
-        showTimeAddedConfirmationAlert(with: response, context: .purchase)
-
-        if transaction.payment == pendingPayment {
-            compoundInteractionRestriction.decrease(animated: true)
-        }
-    }
-
-
-    // MARK: - Actions
-
-    @objc private func doLogout() {
-        showLogoutConfirmation(animated: true) { confirmed in
-            if confirmed {
-                self.confirmLogout()
-            }
-        }
-    }
-
-    private func copyAccountToken() {
-        UIPasteboard.general.string = TunnelManager.shared.accountNumber
+        UIPasteboard.general.string = accountData.number
     }
 
     @objc private func doPurchase() {
-        guard let product = product, let accountNumber = TunnelManager.shared.accountNumber else { return }
+        guard case let .received(product) = productState,
+              let accountData = interactor.deviceState.accountData
+        else {
+            return
+        }
 
         let payment = SKPayment(product: product)
+        interactor.addPayment(payment, for: accountData.number)
 
-        pendingPayment = payment
-        compoundInteractionRestriction.increase(animated: true)
-
-        AppStorePaymentManager.shared.addPayment(payment, for: accountNumber)
+        setPaymentState(.makingPayment(payment), animated: true)
     }
 
     @objc private func restorePurchases() {
-        guard let accountNumber = TunnelManager.shared.accountNumber  else { return }
+        guard let accountData = interactor.deviceState.accountData else {
+            return
+        }
 
-        compoundInteractionRestriction.increase(animated: true)
+        setPaymentState(.restoringPurchases, animated: true)
 
-        _ = AppStorePaymentManager.shared.restorePurchases(for: accountNumber) { completion in
+        _ = interactor.restorePurchases(for: accountData.number) { [weak self] completion in
+            guard let self = self else { return }
+
             switch completion {
-            case .success(let response):
+            case let .success(response):
                 self.showTimeAddedConfirmationAlert(with: response, context: .restoration)
 
-            case .failure(let error):
-                let alertController = UIAlertController(
-                    title: NSLocalizedString(
-                        "RESTORE_PURCHASES_FAILURE_ALERT_TITLE",
-                        tableName: "Account",
-                        value: "Cannot restore purchases",
-                        comment: ""
-                    ),
-                    message: error.errorChainDescription,
-                    preferredStyle: .alert
-                )
-                alertController.addAction(
-                    UIAlertAction(title: NSLocalizedString(
-                        "RESTORE_PURCHASES_FAILURE_ALERT_OK_ACTION",
-                        tableName: "Account",
-                        value: "OK",
-                        comment: ""
-                    ), style: .cancel)
-                )
-                self.alertPresenter.enqueue(alertController, presentingController: self)
+            case let .failure(error):
+                self.showRestorePurchasesErrorAlert(error: error)
 
             case .cancelled:
                 break
             }
 
-            self.compoundInteractionRestriction.decrease(animated: true)
-        }
-    }
-
-}
-
-private extension REST.CreateApplePaymentResponse {
-
-    enum Context {
-        case purchase
-        case restoration
-    }
-
-    func alertTitle(context: Context) -> String {
-        switch context {
-        case .purchase:
-            return NSLocalizedString(
-                "TIME_ADDED_ALERT_SUCCESS_TITLE",
-                tableName: "Account",
-                value: "Thanks for your purchase",
-                comment: ""
-            )
-        case .restoration:
-            return NSLocalizedString(
-                "RESTORE_PURCHASES_ALERT_TITLE",
-                tableName: "Account",
-                value: "Restore purchases",
-                comment: ""
-            )
-        }
-    }
-
-    func alertMessage(context: Context) -> String {
-        switch context {
-        case .purchase:
-            return String(
-                format: NSLocalizedString(
-                    "TIME_ADDED_ALERT_SUCCESS_MESSAGE",
-                    tableName: "Account",
-                    value: "%@ have been added to your account",
-                    comment: ""
-                ),
-                formattedTimeAdded ?? ""
-            )
-        case .restoration:
-            switch self {
-            case .noTimeAdded:
-                return NSLocalizedString(
-                    "RESTORE_PURCHASES_ALERT_NO_TIME_ADDED_MESSAGE",
-                    tableName: "Account",
-                    value: "Your previous purchases have already been added to this account.",
-                    comment: ""
-                )
-            case .timeAdded:
-                return String(
-                    format: NSLocalizedString(
-                        "RESTORE_PURCHASES_ALERT_TIME_ADDED_MESSAGE",
-                        tableName: "Account",
-                        value: "%@ have been added to your account",
-                        comment: ""
-                    ),
-                    formattedTimeAdded ?? ""
-                )
-            }
+            self.setPaymentState(.none, animated: true)
         }
     }
 }

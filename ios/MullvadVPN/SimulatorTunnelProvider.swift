@@ -66,11 +66,17 @@ class SimulatorTunnelProviderDelegate {
         }
     }
 
-    func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+    func startTunnel(
+        options: [String: NSObject]?,
+        completionHandler: @escaping (Error?) -> Void
+    ) {
         completionHandler(nil)
     }
 
-    func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+    func stopTunnel(
+        with reason: NEProviderStopReason,
+        completionHandler: @escaping () -> Void
+    ) {
         completionHandler()
     }
 
@@ -79,7 +85,7 @@ class SimulatorTunnelProviderDelegate {
     }
 }
 
-class SimulatorTunnelProvider {
+final class SimulatorTunnelProvider {
     static let shared = SimulatorTunnelProvider()
 
     private let lock = NSLock()
@@ -101,8 +107,11 @@ class SimulatorTunnelProvider {
 
     private init() {}
 
-    fileprivate func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
-        self.delegate.handleAppMessage(messageData, completionHandler: completionHandler)
+    fileprivate func handleAppMessage(
+        _ messageData: Data,
+        completionHandler: ((Data?) -> Void)? = nil
+    ) {
+        delegate.handleAppMessage(messageData, completionHandler: completionHandler)
     }
 }
 
@@ -214,12 +223,15 @@ class SimulatorVPNConnection: NSObject, VPNConnectionProtocol {
 
 // MARK: - NETunnelProviderSession stubs
 
-class SimulatorTunnelProviderSession: SimulatorVPNConnection, VPNTunnelProviderSessionProtocol {
-
+final class SimulatorTunnelProviderSession: SimulatorVPNConnection,
+    VPNTunnelProviderSessionProtocol
+{
     func sendProviderMessage(_ messageData: Data, responseHandler: ((Data?) -> Void)?) throws {
-        SimulatorTunnelProvider.shared.handleAppMessage(messageData, completionHandler: responseHandler)
+        SimulatorTunnelProvider.shared.handleAppMessage(
+            messageData,
+            completionHandler: responseHandler
+        )
     }
-
 }
 
 // MARK: - NETunnelProviderManager stubs
@@ -246,7 +258,7 @@ private struct SimulatorTunnelInfo {
     /// Protocol configuration
     var protocolConfiguration: NEVPNProtocol? {
         didSet {
-            self.connection.protocolConfiguration = protocolConfiguration ?? NEVPNProtocol()
+            connection.protocolConfiguration = protocolConfiguration ?? NEVPNProtocol()
         }
     }
 
@@ -257,8 +269,7 @@ private struct SimulatorTunnelInfo {
     init() {}
 }
 
-class SimulatorTunnelProviderManager: VPNTunnelProviderManagerProtocol, Equatable {
-
+final class SimulatorTunnelProviderManager: NSObject, VPNTunnelProviderManagerProtocol {
     static let tunnelsLock = NSRecursiveLock()
     fileprivate static var tunnels = [SimulatorTunnelInfo]()
 
@@ -348,7 +359,10 @@ class SimulatorTunnelProviderManager: VPNTunnelProviderManagerProtocol, Equatabl
         return tunnelInfo.connection
     }
 
-    static func loadAllFromPreferences(completionHandler: ([SimulatorTunnelProviderManager]?, Error?) -> Void) {
+    static func loadAllFromPreferences(completionHandler: (
+        [SimulatorTunnelProviderManager]?,
+        Error?
+    ) -> Void) {
         Self.tunnelsLock.lock()
         let tunnelProviders = tunnels.map { tunnelInfo in
             return SimulatorTunnelProviderManager(tunnelInfo: tunnelInfo)
@@ -358,12 +372,14 @@ class SimulatorTunnelProviderManager: VPNTunnelProviderManagerProtocol, Equatabl
         completionHandler(tunnelProviders, nil)
     }
 
-    required convenience init() {
-        self.init(tunnelInfo: SimulatorTunnelInfo())
+    override required init() {
+        tunnelInfo = SimulatorTunnelInfo()
+        super.init()
     }
 
     private init(tunnelInfo: SimulatorTunnelInfo) {
         self.tunnelInfo = tunnelInfo
+        super.init()
     }
 
     func loadFromPreferences(completionHandler: (Error?) -> Void) {
@@ -372,7 +388,7 @@ class SimulatorTunnelProviderManager: VPNTunnelProviderManagerProtocol, Equatabl
         Self.tunnelsLock.lock()
 
         if let savedTunnel = Self.tunnels.first(where: { $0.identifier == self.identifier }) {
-            self.tunnelInfo = savedTunnel
+            tunnelInfo = savedTunnel
         } else {
             error = NEVPNError(.configurationInvalid)
         }
@@ -386,9 +402,9 @@ class SimulatorTunnelProviderManager: VPNTunnelProviderManagerProtocol, Equatabl
         Self.tunnelsLock.lock()
 
         if let index = Self.tunnels.firstIndex(where: { $0.identifier == self.identifier }) {
-            Self.tunnels[index] = self.tunnelInfo
+            Self.tunnels[index] = tunnelInfo
         } else {
-            Self.tunnels.append(self.tunnelInfo)
+            Self.tunnels.append(tunnelInfo)
         }
 
         Self.tunnelsLock.unlock()
@@ -412,10 +428,12 @@ class SimulatorTunnelProviderManager: VPNTunnelProviderManagerProtocol, Equatabl
         completionHandler?(error)
     }
 
-    static func == (lhs: SimulatorTunnelProviderManager, rhs: SimulatorTunnelProviderManager) -> Bool {
+    static func == (
+        lhs: SimulatorTunnelProviderManager,
+        rhs: SimulatorTunnelProviderManager
+    ) -> Bool {
         lhs.identifier == rhs.identifier
     }
-
 }
 
 #endif

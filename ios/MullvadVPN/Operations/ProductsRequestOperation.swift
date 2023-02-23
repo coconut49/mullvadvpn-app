@@ -1,15 +1,17 @@
 //
 //  ProductsRequestOperation.swift
-//  ProductsRequestOperation
+//  MullvadVPN
 //
 //  Created by pronebird on 02/09/2021.
 //  Copyright © 2021 Mullvad VPN AB. All rights reserved.
 //
 
-import Foundation
+import Operations
 import StoreKit
 
-class ProductsRequestOperation: ResultOperation<SKProductsResponse, Error>, SKProductsRequestDelegate {
+public final class ProductsRequestOperation: ResultOperation<SKProductsResponse, Error>,
+    SKProductsRequestDelegate
+{
     private let productIdentifiers: Set<String>
 
     private let maxRetryCount = 10
@@ -29,22 +31,22 @@ class ProductsRequestOperation: ResultOperation<SKProductsResponse, Error>, SKPr
         )
     }
 
-    override func main() {
+    override public func main() {
         startRequest()
     }
 
-    override func operationDidCancel() {
+    override public func operationDidCancel() {
         request?.cancel()
         retryTimer?.cancel()
     }
 
     // - MARK: SKProductsRequestDelegate
 
-    func requestDidFinish(_ request: SKRequest) {
+    public func requestDidFinish(_ request: SKRequest) {
         // no-op
     }
 
-    func request(_ request: SKRequest, didFailWithError error: Error) {
+    public func request(_ request: SKRequest, didFailWithError error: Error) {
         dispatchQueue.async {
             if self.retryCount < self.maxRetryCount, !self.isCancelled {
                 self.retryCount += 1
@@ -55,7 +57,10 @@ class ProductsRequestOperation: ResultOperation<SKProductsResponse, Error>, SKPr
         }
     }
 
-    func productsRequest(_ request: SKProductsRequest, didReceive response: SKProductsResponse) {
+    public func productsRequest(
+        _ request: SKProductsRequest,
+        didReceive response: SKProductsResponse
+    ) {
         finish(completion: .success(response))
     }
 
@@ -78,7 +83,7 @@ class ProductsRequestOperation: ResultOperation<SKProductsResponse, Error>, SKPr
             self?.finish(completion: .failure(error))
         }
 
-        retryTimer?.schedule(wallDeadline: .now() + self.retryDelay)
+        retryTimer?.schedule(wallDeadline: .now() + retryDelay)
         retryTimer?.activate()
     }
 }

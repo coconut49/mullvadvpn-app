@@ -9,17 +9,17 @@ import log from '../../shared/logging';
 import { capitalizeEveryWord } from '../../shared/string-helpers';
 import { useAppContext } from '../context';
 import { transitions, useHistory } from '../lib/history';
+import { formatHtml } from '../lib/html-formatter';
 import { RoutePath } from '../lib/routes';
 import { useBoolean } from '../lib/utilityHooks';
-import { formatMarkdown } from '../markdown-formatter';
 import { useSelector } from '../redux/store';
 import * as AppButton from './AppButton';
 import * as Cell from './cell';
-import { bigText } from './common-styles';
+import { bigText, measurements } from './common-styles';
 import CustomScrollbars from './CustomScrollbars';
 import { Brand, HeaderBarSettingsButton } from './HeaderBar';
 import ImageView from './ImageView';
-import { Header, Layout, SettingsContainer } from './Layout';
+import { Footer, Header, Layout, SettingsContainer } from './Layout';
 import List from './List';
 import { ModalAlert, ModalAlertType, ModalContainer, ModalMessage } from './Modal';
 
@@ -39,13 +39,6 @@ const StyledBody = styled.div({
   paddingBottom: 'auto',
 });
 
-const StyledFooter = styled.div({
-  display: 'flex',
-  flexDirection: 'column',
-  flex: 0,
-  padding: '18px 22px 22px',
-});
-
 const StyledStatusIcon = styled.div({
   alignSelf: 'center',
   width: '60px',
@@ -55,17 +48,17 @@ const StyledStatusIcon = styled.div({
 
 const StyledTitle = styled.span(bigText, {
   lineHeight: '38px',
-  margin: '0 22px 8px',
+  margin: `0 ${measurements.viewMargin} 8px`,
   color: colors.white,
 });
 
 const StyledLabel = styled.span({
   fontFamily: 'Open Sans',
-  fontSize: '13px',
+  fontSize: '12px',
   fontWeight: 600,
   lineHeight: '20px',
   color: colors.white,
-  margin: '0 22px 18px',
+  margin: `0 ${measurements.viewMargin} 18px`,
 });
 
 const StyledSpacer = styled.div({
@@ -84,11 +77,6 @@ const StyledRemoveDeviceButton = styled.button({
   border: 'none',
 });
 
-const StyledRemoveSpinner = styled(ImageView)({
-  alignSelf: 'center',
-  marginTop: '10px',
-});
-
 export default function TooManyDevices() {
   const history = useHistory();
   const { removeDevice, login, cancelLogin } = useAppContext();
@@ -103,10 +91,13 @@ export default function TooManyDevices() {
     [removeDevice, accountToken],
   );
 
-  const continueLogin = useCallback(() => login(accountToken), [login, accountToken]);
+  const continueLogin = useCallback(() => {
+    void login(accountToken);
+    history.reset(RoutePath.login, { transition: transitions.pop });
+  }, [login, accountToken]);
   const cancel = useCallback(() => {
     cancelLogin();
-    history.reset(RoutePath.login, transitions.pop);
+    history.reset(RoutePath.login, { transition: transitions.pop });
   }, [history.reset, cancelLogin]);
 
   const iconSource = getIconSource(devices);
@@ -138,7 +129,7 @@ export default function TooManyDevices() {
             </StyledBody>
 
             {devices !== undefined && (
-              <StyledFooter>
+              <Footer>
                 <AppButton.ButtonGroup>
                   <AppButton.GreenButton onClick={continueLogin} disabled={continueButtonDisabled}>
                     {
@@ -150,7 +141,7 @@ export default function TooManyDevices() {
                     {messages.gettext('Back')}
                   </AppButton.BlueButton>
                 </AppButton.ButtonGroup>
-              </StyledFooter>
+              </Footer>
             )}
           </StyledContainer>
         </StyledCustomScrollbars>
@@ -210,9 +201,9 @@ function Device(props: IDeviceProps) {
 
   const onRemove = useCallback(async () => {
     setDeleting();
+    hideConfirmation();
     try {
       await props.onRemove(props.device.id);
-      hideConfirmation();
     } catch (e) {
       await handleError(e as Error);
     }
@@ -224,22 +215,26 @@ function Device(props: IDeviceProps) {
     <>
       <Cell.Container>
         <StyledDeviceName aria-hidden>{props.device.name}</StyledDeviceName>
-        <StyledRemoveDeviceButton
-          onClick={showConfirmation}
-          aria-label={sprintf(
-            // TRANSLATORS: Button action description provided to accessibility tools such as screen
-            // TRANSLATORS: readers.
-            // TRANSLATORS: Available placeholders:
-            // TRANSLATORS: %(deviceName)s - The device name to remove.
-            messages.pgettext('accessibility', 'Remove device named %(deviceName)s'),
-            { deviceName: props.device.name },
-          )}>
-          <ImageView
-            source="icon-close"
-            tintColor={colors.white40}
-            tintHoverColor={colors.white60}
-          />
-        </StyledRemoveDeviceButton>
+        {deleting ? (
+          <ImageView source="icon-spinner" width={24} />
+        ) : (
+          <StyledRemoveDeviceButton
+            onClick={showConfirmation}
+            aria-label={sprintf(
+              // TRANSLATORS: Button action description provided to accessibility tools such as screen
+              // TRANSLATORS: readers.
+              // TRANSLATORS: Available placeholders:
+              // TRANSLATORS: %(deviceName)s - The device name to remove.
+              messages.pgettext('accessibility', 'Remove device named %(deviceName)s'),
+              { deviceName: props.device.name },
+            )}>
+            <ImageView
+              source="icon-close"
+              tintColor={colors.white40}
+              tintHoverColor={colors.white60}
+            />
+          </StyledRemoveDeviceButton>
+        )}
       </Cell.Container>
       <ModalAlert
         isOpen={confirmationVisible}
@@ -257,37 +252,31 @@ function Device(props: IDeviceProps) {
           </AppButton.BlueButton>,
         ]}
         close={hideConfirmation}>
-        {deleting ? (
-          <StyledRemoveSpinner source="icon-spinner" width={60} />
-        ) : (
-          <>
-            <ModalMessage>
-              {formatMarkdown(
-                sprintf(
-                  // TRANSLATORS: Text displayed above button which logs out another device.
-                  // TRANSLATORS: The text enclosed in "**" will appear bold.
-                  // TRANSLATORS: Available placeholders:
-                  // TRANSLATORS: %(deviceName)s - The name of the device to log out.
-                  messages.pgettext(
-                    'device-management',
-                    'Are you sure you want to log out of **%(deviceName)s**?',
-                  ),
-                  { deviceName: capitalizedDeviceName },
-                ),
-              )}
-            </ModalMessage>
-            {props.device.ports && props.device.ports.length > 0 && (
-              <ModalMessage>
-                {
-                  // TRANSLATORS: Further information about consequences of logging out device.
-                  messages.pgettext(
-                    'device-management',
-                    'This will delete all forwarded ports. Local settings will be saved.',
-                  )
-                }
-              </ModalMessage>
-            )}
-          </>
+        <ModalMessage>
+          {formatHtml(
+            sprintf(
+              // TRANSLATORS: Text displayed above button which logs out another device.
+              // TRANSLATORS: The text enclosed in "<b></b>" will appear bold.
+              // TRANSLATORS: Available placeholders:
+              // TRANSLATORS: %(deviceName)s - The name of the device to log out.
+              messages.pgettext(
+                'device-management',
+                'Are you sure you want to log <b>%(deviceName)s</b> out?',
+              ),
+              { deviceName: capitalizedDeviceName },
+            ),
+          )}
+        </ModalMessage>
+        {props.device.ports && props.device.ports.length > 0 && (
+          <ModalMessage>
+            {
+              // TRANSLATORS: Further information about consequences of logging out device.
+              messages.pgettext(
+                'device-management',
+                'This will delete all forwarded ports. Local settings will be saved.',
+              )
+            }
+          </ModalMessage>
         )}
       </ModalAlert>
       <ModalAlert

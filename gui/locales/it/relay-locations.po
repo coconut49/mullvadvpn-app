@@ -10,7 +10,7 @@ msgstr ""
 "Project-Id-Version: mullvad-app\n"
 "Language-Team: Italian\n"
 "Language: it_IT\n"
-"PO-Revision-Date: 2022-07-12 06:30\n"
+"PO-Revision-Date: 2023-02-06 12:43\n"
 
 #. AU ADL
 msgid "Adelaide"
@@ -59,6 +59,10 @@ msgstr "Belgrado"
 #. US BOS
 msgid "Boston, MA"
 msgstr "Boston, MA"
+
+#. SK BTS
+msgid "Bratislava"
+msgstr "Bratislava"
 
 #. BR
 msgid "Brazil"
@@ -111,6 +115,10 @@ msgstr "Cleveland, OH"
 #. DK CPH
 msgid "Copenhagen"
 msgstr "Copenaghen"
+
+#. HR
+msgid "Croatia"
+msgstr "Croazia"
 
 #. CZ
 msgid "Czech Republic"
@@ -183,6 +191,10 @@ msgstr "Hong Kong"
 #. US HNL
 msgid "Honolulu, HI"
 msgstr "Honolulu, HI"
+
+#. US HOU
+msgid "Houston, TX"
+msgstr "Houston, TX"
 
 #. HU
 msgid "Hungary"
@@ -380,6 +392,10 @@ msgstr "Riga"
 msgid "Romania"
 msgstr "Romania"
 
+#. IT ROM
+msgid "Rome"
+msgstr "Roma"
+
 #. US SLC
 msgid "Salt Lake City, UT"
 msgstr "Salt Lake City, UT"
@@ -420,6 +436,10 @@ msgstr "Sioux Falls, SD"
 msgid "Skopje"
 msgstr "Skopje"
 
+#. SK
+msgid "Slovakia"
+msgstr "Slovakia"
+
 #. BG SOF
 msgid "Sofia"
 msgstr "Sofia"
@@ -439,6 +459,10 @@ msgstr "Saint Louis, MO"
 #. US XLX
 msgid "Stamford, CT"
 msgstr "Stamford, CT"
+
+#. NO SVG
+msgid "Stavanger"
+msgstr "Stavanger"
 
 #. SE STO
 msgid "Stockholm"
@@ -511,6 +535,10 @@ msgstr "Washington DC"
 #. AT VIE
 msgid "Wien"
 msgstr "Vienna"
+
+#. HR ZAG
+msgid "Zagreb"
+msgstr "Zagabria"
 
 #. CH ZRH
 msgid "Zurich"

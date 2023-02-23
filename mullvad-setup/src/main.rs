@@ -9,10 +9,8 @@ use talpid_core::{
 };
 use talpid_types::ErrorExt;
 
-pub const PRODUCT_VERSION: &str = include_str!(concat!(env!("OUT_DIR"), "/product-version.txt"));
-
 lazy_static::lazy_static! {
-    static ref APP_VERSION: ParsedAppVersion = ParsedAppVersion::from_str(PRODUCT_VERSION).unwrap();
+    static ref APP_VERSION: ParsedAppVersion = ParsedAppVersion::from_str(mullvad_version::VERSION).unwrap();
     static ref IS_DEV_BUILD: bool = APP_VERSION.is_dev();
 }
 
@@ -36,15 +34,6 @@ impl From<Error> for ExitStatus {
     }
 }
 
-#[cfg(windows)]
-mod daemon_paths;
-
-#[cfg(windows)]
-type SettingsPathErrorType = std::io::Error;
-
-#[cfg(not(windows))]
-type SettingsPathErrorType = mullvad_paths::Error;
-
 #[derive(err_derive::Error, Debug)]
 #[error(no_from)]
 pub enum Error {
@@ -67,7 +56,7 @@ pub enum Error {
     RemoveDeviceError(#[error(source)] mullvad_api::rest::Error),
 
     #[error(display = "Failed to obtain settings directory path")]
-    SettingsPathError(#[error(source)] SettingsPathErrorType),
+    SettingsPathError(#[error(source)] mullvad_paths::Error),
 
     #[error(display = "Failed to obtain cache directory path")]
     CachePathError(#[error(source)] mullvad_paths::Error),
@@ -101,7 +90,7 @@ async fn main() {
     ];
 
     let app = clap::App::new(crate_name!())
-        .version(PRODUCT_VERSION)
+        .version(mullvad_version::VERSION)
         .author(crate_authors!())
         .about(crate_description!())
         .setting(clap::AppSettings::SubcommandRequiredElseHelp)
@@ -116,7 +105,7 @@ async fn main() {
         Some(("remove-device", _)) => remove_device().await,
         Some(("is-older-version", sub_matches)) => {
             let old_version = sub_matches.value_of("OLDVERSION").unwrap();
-            match is_older_version(old_version).await {
+            match is_older_version(old_version) {
                 // Returning exit status
                 Ok(status) => process::exit(status as i32),
                 Err(error) => Err(error),
@@ -131,7 +120,7 @@ async fn main() {
     }
 }
 
-async fn is_older_version(old_version: &str) -> Result<ExitStatus, Error> {
+fn is_older_version(old_version: &str) -> Result<ExitStatus, Error> {
     let parsed_version =
         ParsedAppVersion::from_str(old_version).map_err(|_| Error::ParseVersionStringError)?;
 
@@ -156,10 +145,13 @@ async fn reset_firewall() -> Result<(), Error> {
         return Err(Error::DaemonIsRunning);
     }
 
-    Firewall::new()
-        .map_err(Error::FirewallError)?
-        .reset_policy()
-        .map_err(Error::FirewallError)
+    Firewall::new(
+        #[cfg(target_os = "linux")]
+        mullvad_types::TUNNEL_FWMARK,
+    )
+    .map_err(Error::FirewallError)?
+    .reset_policy()
+    .map_err(Error::FirewallError)
 }
 
 async fn remove_device() -> Result<(), Error> {
@@ -203,17 +195,8 @@ async fn remove_device() -> Result<(), Error> {
     Ok(())
 }
 
-#[cfg(not(windows))]
 fn get_paths() -> Result<(PathBuf, PathBuf), Error> {
     let cache_path = mullvad_paths::cache_dir().map_err(Error::CachePathError)?;
     let settings_path = mullvad_paths::settings_dir().map_err(Error::SettingsPathError)?;
-    Ok((cache_path, settings_path))
-}
-
-#[cfg(windows)]
-fn get_paths() -> Result<(PathBuf, PathBuf), Error> {
-    let cache_path = mullvad_paths::cache_dir().map_err(Error::CachePathError)?;
-    let settings_path =
-        daemon_paths::get_mullvad_daemon_settings_path().map_err(Error::SettingsPathError)?;
     Ok((cache_path, settings_path))
 }

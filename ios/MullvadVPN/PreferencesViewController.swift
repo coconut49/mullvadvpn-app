@@ -7,19 +7,17 @@
 //
 
 import UIKit
-import Logging
 
-class PreferencesViewController: UITableViewController, PreferencesDataSourceDelegate, TunnelObserver {
-
-    private let logger = Logger(label: "PreferencesViewController")
-
+class PreferencesViewController: UITableViewController, PreferencesDataSourceDelegate {
+    private let interactor: PreferencesInteractor
     private let dataSource = PreferencesDataSource()
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
         return .lightContent
     }
 
-    init() {
+    init(interactor: PreferencesInteractor) {
+        self.interactor = interactor
         super.init(style: .grouped)
     }
 
@@ -46,11 +44,11 @@ class PreferencesViewController: UITableViewController, PreferencesDataSourceDel
         )
         navigationItem.rightBarButtonItem = editButtonItem
 
-        TunnelManager.shared.addObserver(self)
-
-        if let dnsSettings = TunnelManager.shared.tunnelSettings?.dnsSettings {
-            dataSource.update(from: dnsSettings)
+        interactor.dnsSettingsDidChange = { [weak self] newDNSSettings in
+            self?.dataSource.update(from: newDNSSettings)
         }
+
+        dataSource.update(from: interactor.dnsSettings)
     }
 
     override func setEditing(_ editing: Bool, animated: Bool) {
@@ -58,46 +56,20 @@ class PreferencesViewController: UITableViewController, PreferencesDataSourceDel
 
         navigationItem.setHidesBackButton(editing, animated: animated)
 
-        if #available(iOS 13.0, *) {
-            // Disable swipe to dismiss when editing
-            isModalInPresentation = editing
-        } else {
-            // no-op
-        }
+        // Disable swipe to dismiss when editing
+        isModalInPresentation = editing
 
         super.setEditing(editing, animated: animated)
     }
 
     // MARK: - PreferencesDataSourceDelegate
 
-    func preferencesDataSource(_ dataSource: PreferencesDataSource, didChangeViewModel dataModel: PreferencesViewModel) {
+    func preferencesDataSource(
+        _ dataSource: PreferencesDataSource,
+        didChangeViewModel dataModel: PreferencesViewModel
+    ) {
         let dnsSettings = dataModel.asDNSSettings()
 
-        TunnelManager.shared.setDNSSettings(dnsSettings) { [weak self] error in
-            if let error = error {
-                self?.logger.error(chainedError: error, message: "Failed to save DNS settings")
-            }
-        }
+        interactor.setDNSSettings(dnsSettings)
     }
-
-    // MARK: - TunnelObserver
-
-    func tunnelManagerDidLoadConfiguration(_ manager: TunnelManager) {
-        // no-op
-    }
-
-    func tunnelManager(_ manager: TunnelManager, didUpdateTunnelState tunnelState: TunnelState) {
-        // no-op
-    }
-
-    func tunnelManager(_ manager: TunnelManager, didFailWithError error: TunnelManager.Error) {
-        // no-op
-    }
-
-    func tunnelManager(_ manager: TunnelManager, didUpdateTunnelSettings tunnelSettings: TunnelSettingsV2?) {
-        guard let dnsSettings = tunnelSettings?.dnsSettings else { return }
-
-        dataSource.update(from: dnsSettings)
-    }
-
 }

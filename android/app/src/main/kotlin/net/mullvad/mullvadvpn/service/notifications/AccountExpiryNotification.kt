@@ -15,6 +15,8 @@ import net.mullvad.mullvadvpn.service.MullvadDaemon
 import net.mullvad.mullvadvpn.service.endpoint.AccountCache
 import net.mullvad.mullvadvpn.util.Intermittent
 import net.mullvad.mullvadvpn.util.JobTracker
+import net.mullvad.mullvadvpn.util.SdkUtils
+import net.mullvad.mullvadvpn.util.SdkUtils.isNotificationPermissionGranted
 import org.joda.time.DateTime
 import org.joda.time.Duration
 
@@ -68,8 +70,10 @@ class AccountExpiryNotification(
         val durationUntilExpiry = expiryDate?.remainingTime()
 
         if (accountCache.isNewAccount.not() && durationUntilExpiry?.isCloseToExpiry() == true) {
-            val notification = build(expiryDate, durationUntilExpiry)
-            channel.notificationManager.notify(NOTIFICATION_ID, notification)
+            if (context.isNotificationPermissionGranted()) {
+                val notification = build(expiryDate, durationUntilExpiry)
+                channel.notificationManager.notify(NOTIFICATION_ID, notification)
+            }
             jobTracker.newUiJob("scheduleUpdate") { scheduleUpdate() }
         } else {
             channel.notificationManager.cancel(NOTIFICATION_ID)
@@ -94,10 +98,9 @@ class AccountExpiryNotification(
         val url = jobTracker.runOnBackground {
             Uri.parse("$buyMoreTimeUrl?token=${daemon.await().getWwwAuthToken()}")
         }
-
         val intent = Intent(Intent.ACTION_VIEW, url)
-        val flags = PendingIntent.FLAG_UPDATE_CURRENT
-        val pendingIntent = PendingIntent.getActivity(context, 1, intent, flags)
+        val pendingIntent =
+            PendingIntent.getActivity(context, 1, intent, SdkUtils.getSupportedPendingIntentFlags())
 
         return channel.buildNotification(pendingIntent, format(expiry, remainingTime))
     }

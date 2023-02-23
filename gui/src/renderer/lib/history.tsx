@@ -1,8 +1,7 @@
 import { Action, History as OriginalHistory, Location, LocationDescriptorObject } from 'history';
-import React from 'react';
-import { RouteComponentProps, useHistory as useReactRouterHistory, withRouter } from 'react-router';
+import { useHistory as useReactRouterHistory } from 'react-router';
 
-import { IHistoryObject } from '../../shared/ipc-types';
+import { IHistoryObject, LocationState } from '../../shared/ipc-types';
 import { GeneratedRoutePath, RoutePath } from './routes';
 
 export interface ITransitionSpecification {
@@ -40,25 +39,36 @@ export const transitions: ITransitionMap = {
   },
 };
 
-type LocationDescriptor<S> = RoutePath | GeneratedRoutePath | LocationDescriptorObject<S>;
+const transitionOpposites: Record<string, string> = {
+  'slide-up': 'slide-down',
+  'slide-down': 'slide-up',
+  push: 'pop',
+  pop: 'push',
+  '': '',
+};
 
-type LocationListener<S = unknown> = (
-  location: Location<S>,
+function oppositeTransition(transition: ITransitionSpecification): ITransitionSpecification {
+  return {
+    ...transition,
+    name: transitionOpposites[transition.name],
+  };
+}
+
+type LocationDescriptor = RoutePath | GeneratedRoutePath | LocationDescriptorObject<LocationState>;
+
+type LocationListener = (
+  location: Location<LocationState>,
   action: Action,
   transition: ITransitionSpecification,
 ) => void;
 
-// It currently isn't possible to implement this correctly with support for a generic state. State
-// can be added as a generic type (<S = unknown>) after this issue has been resolved:
-// https://github.com/DefinitelyTyped/DefinitelyTyped/issues/49060
-type S = unknown;
 export default class History {
-  private listeners: LocationListener<S>[] = [];
-  private entries: Location<S>[];
+  private listeners: LocationListener[] = [];
+  private entries: Location<LocationState>[];
   private index = 0;
   private lastAction: Action = 'POP';
 
-  public constructor(location: LocationDescriptor<S>, state?: S) {
+  public constructor(location: LocationDescriptor, state?: LocationState) {
     this.entries = [this.createLocation(location, state)];
   }
 
@@ -71,7 +81,7 @@ export default class History {
     return history;
   }
 
-  public get location(): Location<S> {
+  public get location(): Location<LocationState> {
     return this.entries[this.index];
   }
 
@@ -83,42 +93,29 @@ export default class History {
     return this.lastAction;
   }
 
-  public push = (nextLocation: LocationDescriptor<S>, nextState?: S) => {
-    this.pushImpl(nextLocation, nextState);
-    this.notify(transitions.push);
+  public push = (nextLocation: LocationDescriptor, nextState?: Partial<LocationState>) => {
+    const state = { transition: transitions.push, ...nextState };
+    this.pushImpl(nextLocation, state);
+    this.notify(state.transition);
   };
 
-  public pop = () => {
-    if (this.popImpl()) {
-      this.notify(transitions.pop);
-    }
-  };
-
-  public show = (nextLocation: LocationDescriptor<S>, nextState?: S) => {
-    this.pushImpl(nextLocation, nextState);
-    this.notify(transitions.show);
-  };
-
-  public dismiss = (all?: boolean, transition = transitions.dismiss) => {
-    if (this.popImpl(all ? this.index : 1)) {
+  public pop = (all?: boolean) => {
+    const transition = this.popImpl(all === true ? this.index : 1);
+    if (transition !== undefined) {
       this.notify(transition);
     }
   };
 
-  public reset = (
-    nextLocation: LocationDescriptor<S>,
-    transition?: ITransitionSpecification,
-    nextState?: S,
-  ) => {
+  public reset = (nextLocation: LocationDescriptor, nextState?: Partial<LocationState>) => {
     const location = this.createLocation(nextLocation, nextState);
     this.lastAction = 'REPLACE';
     this.index = 0;
     this.entries = [location];
 
-    this.notify(transition ?? transitions.none);
+    this.notify(nextState?.transition ?? transitions.none);
   };
 
-  public listen(callback: LocationListener<S>) {
+  public listen(callback: LocationListener) {
     this.listeners.push(callback);
     return () => (this.listeners = this.listeners.filter((listener) => listener !== callback));
   }
@@ -163,22 +160,24 @@ export default class History {
     throw Error('Not implemented');
   }
 
-  private pushImpl(nextLocation: LocationDescriptor<S>, nextState?: S) {
+  private pushImpl(nextLocation: LocationDescriptor, nextState?: Partial<LocationState>) {
     const location = this.createLocation(nextLocation, nextState);
     this.lastAction = 'PUSH';
     this.index += 1;
     this.entries.splice(this.index, this.entries.length - this.index, location);
   }
 
-  private popImpl(n = 1): boolean {
+  private popImpl(n = 1): ITransitionSpecification | undefined {
     if (this.canGo(-n)) {
       this.lastAction = 'POP';
       this.index -= n;
+
+      const transition = this.entries[this.index + 1].state.transition;
       this.entries = this.entries.slice(0, this.index + 1);
 
-      return true;
+      return oppositeTransition(transition);
     } else {
-      return false;
+      return undefined;
     }
   }
 
@@ -186,7 +185,10 @@ export default class History {
     this.listeners.forEach((listener) => listener(this.location, this.action, transition));
   }
 
-  private createLocation(location: LocationDescriptor<S>, state?: S): Location<S> {
+  private createLocation(
+    location: LocationDescriptor,
+    state?: Partial<LocationState>,
+  ): Location<LocationState> {
     if (typeof location === 'string') {
       return this.createLocationFromString(location, state);
     } else if ('routePath' in location) {
@@ -196,19 +198,30 @@ export default class History {
         pathname: location.pathname ?? this.location.pathname,
         search: location.search ?? '',
         hash: location.hash ?? '',
-        state: location.state,
+        state: this.createState(state),
         key: location.key ?? this.getRandomKey(),
       };
     }
   }
 
-  private createLocationFromString(path: string, state?: S): Location<S> {
+  private createLocationFromString(
+    path: string,
+    state?: Partial<LocationState>,
+  ): Location<LocationState> {
     return {
       pathname: path,
       search: '',
       hash: '',
-      state,
+      state: this.createState(state),
       key: this.getRandomKey(),
+    };
+  }
+
+  private createState(state?: Partial<LocationState>): LocationState {
+    return {
+      scrollPosition: state?.scrollPosition ?? [0, 0],
+      expandedSections: state?.expandedSections ?? {},
+      transition: state?.transition ?? transitions.none,
     };
   }
 
@@ -218,17 +231,5 @@ export default class History {
 }
 
 export function useHistory(): History {
-  return useReactRouterHistory() as History;
-}
-
-export interface IHistoryProps {
-  history: History;
-}
-
-export function withHistory<P>(BaseComponent: React.ComponentType<P & IHistoryProps>) {
-  return withRouter((props: P & RouteComponentProps) => {
-    const history = props.history as History;
-    const mergedProps = ({ ...props, history } as unknown) as P & IHistoryProps;
-    return <BaseComponent {...mergedProps} />;
-  });
+  return useReactRouterHistory<LocationState>() as History;
 }

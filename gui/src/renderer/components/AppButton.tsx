@@ -13,6 +13,7 @@ import {
   StyledVisibleSide,
   transparentButton,
 } from './AppButtonStyles';
+import { measurements } from './common-styles';
 import ImageView from './ImageView';
 
 interface ILabelProps {
@@ -53,7 +54,10 @@ const BaseButton = React.memo(function BaseButtonT(props: IProps) {
         if (groups.label === undefined && typeof child === 'string') {
           return { ...groups, label: <Label textOffset={textOffset}>{child}</Label> };
         } else if (React.isValidElement(child) && child.type === Label) {
-          return { ...groups, label: React.cloneElement(child, { textOffset }) };
+          return {
+            ...groups,
+            label: React.cloneElement(child as React.ReactElement<ILabelProps>, { textOffset }),
+          };
         } else if (groups.label === undefined) {
           return { ...groups, left: [...groups.left, child] };
         } else {
@@ -190,12 +194,12 @@ const StyledButtonWrapper = styled.div({
   flexDirection: 'column',
   flex: 0,
   ':not(:last-child)': {
-    marginBottom: '18px',
+    marginBottom: measurements.buttonVerticalMargin,
   },
 });
 
 interface IButtonGroupProps {
-  children: React.ReactElement[];
+  children: React.ReactNode | React.ReactNode[];
 }
 
 export function ButtonGroup(props: IButtonGroupProps) {

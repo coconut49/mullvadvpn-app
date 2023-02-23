@@ -5,8 +5,12 @@ set -eu
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
+echo "Computing build version..."
+echo ""
+PRODUCT_VERSION=$(cargo run -q --bin mullvad-version versionName)
+echo "Building Mullvad VPN $PRODUCT_VERSION for Android"
+echo ""
 
-PRODUCT_VERSION="$(sed -n -e 's/^ *versionName = "\([^"]*\)"$/\1/p' android/app/build.gradle.kts)"
 BUILD_TYPE="release"
 GRADLE_BUILD_TYPE="release"
 GRADLE_TASK="assembleRelease"
@@ -16,6 +20,8 @@ FILE_SUFFIX=""
 CARGO_ARGS="--release"
 EXTRA_WGGO_ARGS=""
 BUILD_BUNDLE="no"
+CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-"target"}
+SKIP_STRIPPING=${SKIP_STRIPPING:-"no"}
 
 while [ ! -z "${1:-""}" ]; do
     if [[ "${1:-""}" == "--dev-build" ]]; then
@@ -25,7 +31,7 @@ while [ ! -z "${1:-""}" ]; do
         BUNDLE_TASK="bundleDebug"
         BUILT_APK_SUFFIX="-debug"
         FILE_SUFFIX="-debug"
-        CARGO_ARGS=""
+        CARGO_ARGS="--features api-override"
     elif [[ "${1:-""}" == "--fdroid" ]]; then
         GRADLE_BUILD_TYPE="fdroid"
         GRADLE_TASK="assembleFdroid"
@@ -36,31 +42,27 @@ while [ ! -z "${1:-""}" ]; do
         BUILD_BUNDLE="yes"
     elif [[ "${1:-""}" == "--no-docker" ]]; then
         EXTRA_WGGO_ARGS="--no-docker"
+    elif [[ "${1:-""}" == "--skip-stripping" ]]; then
+        SKIP_STRIPPING="yes"
     fi
 
     shift 1
 done
 
 if [[ "$GRADLE_BUILD_TYPE" == "release" ]]; then
-    if [ ! -f "$SCRIPT_DIR/android/keystore.properties" ]; then
+    if [ ! -f "$SCRIPT_DIR/android/credentials/keystore.properties" ]; then
         echo "ERROR: No keystore.properties file found" >&2
         echo "       Please configure the signing keys as described in the README" >&2
         exit 1
     fi
 fi
 
-product_version_commit_hash=$(git rev-parse android/$PRODUCT_VERSION^{commit} || echo "")
-current_head_commit_hash=$(git rev-parse HEAD^{commit})
-if [[ "$BUILD_TYPE" == "debug" || $product_version_commit_hash != $current_head_commit_hash ]]; then
-    PRODUCT_VERSION="${PRODUCT_VERSION}-dev-${current_head_commit_hash:0:6}"
-    echo "Modifying product version to $PRODUCT_VERSION"
-else
+if [[ "$BUILD_TYPE" == "release" && "$PRODUCT_VERSION" != *"-dev-"* ]]; then
     echo "Removing old Rust build artifacts"
     cargo clean
     CARGO_ARGS+=" --locked"
 fi
 
-echo "Building Mullvad VPN $PRODUCT_VERSION for Android"
 pushd "$SCRIPT_DIR/android"
 
 # Fallback to the system-wide gradle command if the gradlew script is removed.
@@ -78,17 +80,6 @@ fi
 $GRADLE_CMD --console plain clean
 mkdir -p "app/build/extraJni"
 popd
-
-function restore_metadata_backups() {
-    pushd "$SCRIPT_DIR"
-    ./version-metadata.sh restore-backup --android
-    mv Cargo.lock.bak Cargo.lock || true
-    popd
-}
-trap 'restore_metadata_backups' EXIT
-
-cp Cargo.lock Cargo.lock.bak
-./version-metadata.sh inject $PRODUCT_VERSION --android
 
 ./wireguard/build-wireguard-go.sh --android $EXTRA_WGGO_ARGS
 
@@ -120,14 +111,18 @@ for ARCHITECTURE in ${ARCHITECTURES:-aarch64 armv7 x86_64 i686}; do
     cargo build $CARGO_ARGS --target "$TARGET" --package mullvad-jni
 
     STRIP_TOOL="${NDK_TOOLCHAIN_DIR}/${LLVM_TRIPLE}-strip"
-    STRIPPED_LIB_PATH="$SCRIPT_DIR/android/app/build/extraJni/$ABI/libmullvad_jni.so"
-    UNSTRIPPED_LIB_PATH="$SCRIPT_DIR/target/$TARGET/$BUILD_TYPE/libmullvad_jni.so"
+    TARGET_LIB_PATH="$SCRIPT_DIR/android/app/build/extraJni/$ABI/libmullvad_jni.so"
+    UNSTRIPPED_LIB_PATH="$CARGO_TARGET_DIR/$TARGET/$BUILD_TYPE/libmullvad_jni.so"
 
-    $STRIP_TOOL --strip-debug --strip-unneeded -o "$STRIPPED_LIB_PATH" "$UNSTRIPPED_LIB_PATH"
+    if [[ "$SKIP_STRIPPING" == "yes" ]]; then
+        cp "$UNSTRIPPED_LIB_PATH" "$TARGET_LIB_PATH"
+    else
+        $STRIP_TOOL --strip-debug --strip-unneeded -o "$TARGET_LIB_PATH" "$UNSTRIPPED_LIB_PATH"
+    fi
 done
 
 echo "Updating relays.json..."
-cargo run --bin relay_list $CARGO_ARGS > dist-assets/relays.json
+cargo run --bin relay_list $CARGO_ARGS > build/relays.json
 
 cd "$SCRIPT_DIR/android"
 $GRADLE_CMD --console plain "$GRADLE_TASK"

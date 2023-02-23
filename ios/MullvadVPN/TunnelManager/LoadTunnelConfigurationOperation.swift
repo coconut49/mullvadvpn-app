@@ -7,98 +7,89 @@
 //
 
 import Foundation
-import Logging
+import MullvadLogging
+import MullvadTypes
+import Operations
 
-class LoadTunnelConfigurationOperation: ResultOperation<(), TunnelManager.Error> {
+class LoadTunnelConfigurationOperation: ResultOperation<Void, Error> {
     private let logger = Logger(label: "LoadTunnelConfigurationOperation")
-    private let state: TunnelManager.State
+    private let interactor: TunnelInteractor
 
-    init(dispatchQueue: DispatchQueue, state: TunnelManager.State) {
-        self.state = state
+    init(dispatchQueue: DispatchQueue, interactor: TunnelInteractor) {
+        self.interactor = interactor
 
         super.init(dispatchQueue: dispatchQueue)
     }
 
     override func main() {
-        TunnelProviderManagerType.loadAllFromPreferences { tunnels, error in
-            self.dispatchQueue.async {
+        let settingsResult = readSettings()
+        let deviceStateResult = readDeviceState()
+
+        let persistentTunnels = interactor.getPersistentTunnels()
+        let tunnel = persistentTunnels.first
+        let settings = settingsResult.flattenValue()
+        let deviceState = deviceStateResult.flattenValue()
+
+        interactor.setSettings(settings ?? TunnelSettingsV2(), persist: false)
+        interactor.setDeviceState(deviceState ?? .loggedOut, persist: false)
+
+        if let tunnel = tunnel, deviceState == nil {
+            logger.debug("Remove orphaned VPN configuration.")
+
+            tunnel.removeFromPreferences { error in
                 if let error = error {
-                    self.finish(completion: .failure(.loadAllVPNConfigurations(error)))
-                } else {
-                    self.didLoadVPNConfigurations(tunnels: tunnels)
+                    self.logger.error(
+                        error: error,
+                        message: "Failed to remove VPN configuration."
+                    )
                 }
+                self.finishOperation(tunnel: nil)
             }
+        } else {
+            finishOperation(tunnel: tunnel)
         }
     }
 
-    private func didLoadVPNConfigurations(tunnels: [TunnelProviderManagerType]?) {
-        var returnError: TunnelManager.Error?
-        var tunnelSettings: TunnelSettingsV2?
-        do {
-            tunnelSettings = try SettingsManager.readSettings()
-        } catch .itemNotFound as KeychainError  {
-            logger.debug("Settings not found in keychain.")
-        } catch let error as DecodingError {
-            logger.error(
-                chainedError: AnyChainedError(error),
-                message: "Cannot decode settings. Will attempt to delete them from keychain."
-            )
+    private func finishOperation(tunnel: Tunnel?) {
+        interactor.setTunnel(tunnel, shouldRefreshTunnelState: true)
+        interactor.setConfigurationLoaded()
 
-            do {
-                try SettingsManager.deleteSettings()
-            } catch {
-                returnError = .deleteSettings(error)
+        finish(completion: .success(()))
+    }
 
-                logger.error(
-                    chainedError: AnyChainedError(error),
-                    message: "Failed to delete settings from keychain."
-                )
-            }
-        } catch {
-            returnError = .readSettings(error)
+    private func readSettings() -> Result<TunnelSettingsV2?, Error> {
+        return Result { try SettingsManager.readSettings() }
+            .flatMapError { error in
+                if let error = error as? KeychainError, error == .itemNotFound {
+                    logger.debug("Settings not found in keychain.")
 
-            logger.error(
-                chainedError: AnyChainedError(error),
-                message: "Unexpected error when reading settings."
-            )
-        }
+                    return .success(nil)
+                } else {
+                    logger.error(
+                        error: error,
+                        message: "Cannot read settings."
+                    )
 
-        let tunnel = tunnels?.first.map { tunnelProvider in
-            return Tunnel(tunnelProvider: tunnelProvider)
-        }
-
-        if let tunnelSettings = tunnelSettings {
-            state.tunnelSettings = tunnelSettings
-            state.setTunnel(tunnel, shouldRefreshTunnelState: true)
-            state.isLoadedConfiguration = true
-
-            finish(completion: .success(()))
-        } else {
-            let onFinish = {
-                self.state.tunnelSettings = nil
-                self.state.setTunnel(nil, shouldRefreshTunnelState: true)
-                self.state.isLoadedConfiguration = returnError == nil
-
-                self.finish(completion: returnError.map { .failure($0) } ?? .success(()))
-            }
-
-            if let tunnel = tunnel {
-                logger.debug("Remove orphaned VPN configuration.")
-
-                tunnel.removeFromPreferences { error in
-                    self.dispatchQueue.async {
-                        if let error = error {
-                            self.logger.error(
-                                chainedError: AnyChainedError(error),
-                                message: "Failed to remove VPN configuration."
-                            )
-                        }
-                        onFinish()
-                    }
+                    return .failure(error)
                 }
-            } else {
-                onFinish()
             }
-        }
+    }
+
+    private func readDeviceState() -> Result<DeviceState?, Error> {
+        return Result { try SettingsManager.readDeviceState() }
+            .flatMapError { error in
+                if let error = error as? KeychainError, error == .itemNotFound {
+                    logger.debug("Device state not found in keychain.")
+
+                    return .success(nil)
+                } else {
+                    logger.error(
+                        error: error,
+                        message: "Cannot read device state."
+                    )
+
+                    return .failure(error)
+                }
+            }
     }
 }

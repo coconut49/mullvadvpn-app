@@ -48,7 +48,10 @@ struct DataSourceSnapshot<Section: Hashable, Item: Hashable> {
         let newItemRange = (itemRange.startIndex ..< newEndIndex)
 
         sectionToItemMapping[sectionIndex] = newItemRange
-        orderedItems.insert(uniqueItemsToAppend.array, at: IndexSet(integersIn: oldEndIndex..<newEndIndex))
+        orderedItems.insert(
+            uniqueItemsToAppend.array,
+            at: IndexSet(integersIn: oldEndIndex ..< newEndIndex)
+        )
 
         offsetItemRange(inSectionsAfter: sectionIndex, by: uniqueItemsToAppend.count)
     }
@@ -56,8 +59,8 @@ struct DataSourceSnapshot<Section: Hashable, Item: Hashable> {
     mutating func appendSections(_ newSections: [Section]) {
         let lastSectionRange = sectionToItemMapping.last
         let emptyRange = lastSectionRange.flatMap { range in
-            return (range.upperBound..<range.upperBound)
-        } ?? (0..<0)
+            return (range.upperBound ..< range.upperBound)
+        } ?? (0 ..< 0)
 
         let uniqueNewSections = NSOrderedSet(array: newSections)
 
@@ -193,21 +196,21 @@ extension DataSourceSnapshot {
 
         var debugDescription: String {
             switch self {
-            case .insert(let indexPath):
+            case let .insert(indexPath):
                 return "insert \(indexPath)"
-            case .delete(let indexPath):
+            case let .delete(indexPath):
                 return "delete \(indexPath)"
-            case .move(let source, let target):
+            case let .move(source, target):
                 return "move from \(source) to \(target)"
-            case .reload(let indexPath):
+            case let .reload(indexPath):
                 return "reload \(indexPath)"
-            case .reconfigure(let indexPath):
+            case let .reconfigure(indexPath):
                 return "reconfigure \(indexPath)"
             }
         }
 
         func breakMoveOntoInsertionDeletion() -> [Change] {
-            if case .move(let fromIndexPath, let toIndexPath) = self {
+            if case let .move(fromIndexPath, toIndexPath) = self {
                 return [.delete(fromIndexPath), .insert(toIndexPath)]
             } else {
                 return [self]
@@ -233,7 +236,7 @@ extension DataSourceSnapshot {
 
                 // Guard against recording the `.move` twice when exchanging two adjacent items.
                 let isSwappingTwoAdjacentItems = changes.contains { otherChange in
-                    if case .move(let fromIndexPath, let toIndexPath) = otherChange {
+                    if case let .move(fromIndexPath, toIndexPath) = otherChange {
                         let itemDistance = abs(oldIndexPath.row - fromIndexPath.row)
 
                         return oldIndexPath == toIndexPath && newIndexPath == fromIndexPath &&
@@ -278,8 +281,8 @@ extension DataSourceSnapshot {
         return Self.changeSetToDifference(changes)
     }
 
-    /// Infer and discard unnecessary moves that occur due to items shifting back or forth based on insertions and
-    /// deletions of other items.
+    /// Infer and discard unnecessary moves that occur due to items shifting back or forth based on
+    /// insertions and deletions of other items.
     private static func inferMoves(changes: [Change]) -> [Change] {
         var newChanges = [Change]()
 
@@ -291,32 +294,37 @@ extension DataSourceSnapshot {
             .sorted(by: Self.changeSortPredicate)
 
         for sourceChange in changes {
-            guard case .move(let sourceIndexPath, let targetIndexPath) = sourceChange else {
+            guard case let .move(sourceIndexPath, targetIndexPath) = sourceChange else {
                 newChanges.append(sourceChange)
                 continue
             }
 
-            // Replay all changes to compute the item's index path, ignoring the changes associated with the current
-            // change.
-            let inferredIndexPath = sortedChangesWithoutMoves.reduce(into: sourceIndexPath) { inferredIndexPath, otherChange in
-                switch otherChange {
-                case .insert(let insertedIndexPath) where insertedIndexPath != targetIndexPath:
-                    if inferredIndexPath.row >= insertedIndexPath.row, inferredIndexPath.section == insertedIndexPath.section {
-                        inferredIndexPath.row += 1
-                    }
+            // Replay all changes to compute the item's index path, ignoring the changes
+            // associated with the current change.
+            let inferredIndexPath = sortedChangesWithoutMoves
+                .reduce(into: sourceIndexPath) { inferredIndexPath, otherChange in
+                    switch otherChange {
+                    case let .insert(insertedIndexPath) where insertedIndexPath != targetIndexPath:
+                        if inferredIndexPath.row >= insertedIndexPath.row,
+                           inferredIndexPath.section == insertedIndexPath.section
+                        {
+                            inferredIndexPath.row += 1
+                        }
 
-                case .delete(let deletedIndexPath) where deletedIndexPath != sourceIndexPath:
-                    if inferredIndexPath.row > deletedIndexPath.row, inferredIndexPath.section == deletedIndexPath.section {
-                        inferredIndexPath.row -= 1
-                    }
+                    case let .delete(deletedIndexPath) where deletedIndexPath != sourceIndexPath:
+                        if inferredIndexPath.row > deletedIndexPath.row,
+                           inferredIndexPath.section == deletedIndexPath.section
+                        {
+                            inferredIndexPath.row -= 1
+                        }
 
-                default:
-                    break
+                    default:
+                        break
+                    }
                 }
-            }
 
-            // Discard the change if the index path, produced after replaying other changes, matches the target index
-            // path.
+            // Discard the change if the index path, produced after replaying other changes,
+            // matches the target index path.
             if inferredIndexPath != targetIndexPath {
                 newChanges.append(contentsOf: sourceChange.breakMoveOntoInsertionDeletion())
             }
@@ -333,19 +341,19 @@ extension DataSourceSnapshot {
     /// Reload, reconfigure: ascending
     private static func changeSortPredicate(_ lhs: Change, _ rhs: Change) -> Bool {
         switch (lhs, rhs) {
-        case (.insert(let lhsIndexPath), .insert(let rhsIndexPath)):
+        case let (.insert(lhsIndexPath), .insert(rhsIndexPath)):
             return lhsIndexPath < rhsIndexPath
 
-        case (.delete(let lhsIndexPath), .delete(let rhsIndexPath)):
+        case let (.delete(lhsIndexPath), .delete(rhsIndexPath)):
             return lhsIndexPath > rhsIndexPath
 
-        case (.reload(let lhsIndexPath), .reload(let rhsIndexPath)):
+        case let (.reload(lhsIndexPath), .reload(rhsIndexPath)):
             return lhsIndexPath < rhsIndexPath
 
-        case (.reconfigure(let lhsIndexPath), .reconfigure(let rhsIndexPath)):
+        case let (.reconfigure(lhsIndexPath), .reconfigure(rhsIndexPath)):
             return lhsIndexPath < rhsIndexPath
 
-        case (let lhs, let rhs):
+        case let (lhs, rhs):
             return lhs.sortOrder < rhs.sortOrder
         }
     }
@@ -358,20 +366,20 @@ extension DataSourceSnapshot {
 
         for change in changes {
             switch change {
-            case .insert(let indexPath):
+            case let .insert(indexPath):
                 indexPathsToInsert.append(indexPath)
 
-            case .delete(let indexPath):
+            case let .delete(indexPath):
                 indexPathsToDelete.append(indexPath)
 
             case .move:
                 // Moves are broken down onto insert and delete changes at this point.
                 break
 
-            case .reload(let indexPath):
+            case let .reload(indexPath):
                 indexPathsToReload.append(indexPath)
 
-            case .reconfigure(let indexPath):
+            case let .reconfigure(indexPath):
                 indexPathsToReconfigure.append(indexPath)
             }
         }
@@ -383,6 +391,12 @@ extension DataSourceSnapshot {
             indexPathsToReconfigure: indexPathsToReconfigure
         )
     }
+}
+
+struct StackViewApplyDataSnapshotConfiguration {
+    var animationDuration: TimeInterval = 0.25
+    var animationOptions: UIView.AnimationOptions = [.curveEaseInOut]
+    var makeView: (IndexPath) -> UIView
 }
 
 struct DataSnapshotDifference: CustomDebugStringConvertible {
@@ -419,7 +433,11 @@ struct DataSnapshotDifference: CustomDebugStringConvertible {
         return s
     }
 
-    func apply(to tableView: UITableView, animateDifferences: Bool, completion: ((Bool) -> Void)? = nil) {
+    func apply(
+        to tableView: UITableView,
+        animateDifferences: Bool,
+        completion: ((Bool) -> Void)? = nil
+    ) {
         let animation: UITableView.RowAnimation = animateDifferences ? .automatic : .none
 
         tableView.performBatchUpdates({
@@ -443,5 +461,81 @@ struct DataSnapshotDifference: CustomDebugStringConvertible {
                 }
             }
         }, completion: completion)
+    }
+
+    func apply(
+        to stackView: UIStackView,
+        configuration: StackViewApplyDataSnapshotConfiguration,
+        animateDifferences: Bool,
+        completion: ((Bool) -> Void)? = nil
+    ) {
+        let viewsToRemove = indexPathsToDelete.map { indexPath in
+            return stackView.arrangedSubviews[indexPath.row]
+        }
+
+        let viewsToAdd = indexPathsToInsert.map { indexPath -> UIView in
+            let view = configuration.makeView(indexPath)
+
+            view.isHidden = true
+            view.alpha = 0
+
+            var viewIndex = indexPath.row
+
+            // Adjust insertion index since views are not removed from stack view during animation.
+            for view in stackView.arrangedSubviews[..<indexPath.row] {
+                if viewsToRemove.contains(view) {
+                    viewIndex += 1
+                }
+            }
+
+            stackView.insertArrangedSubview(view, at: viewIndex)
+
+            return view
+        }
+
+        // Layout inserted subviews before running animations to achieve a folding effect.
+        if animateDifferences {
+            UIView.performWithoutAnimation {
+                stackView.layoutIfNeeded()
+            }
+        }
+
+        let showHideViews = {
+            for view in viewsToRemove {
+                view.alpha = 0
+                view.isHidden = true
+            }
+
+            for view in viewsToAdd {
+                view.alpha = 1
+                view.isHidden = false
+            }
+        }
+
+        let removeViews = {
+            for view in viewsToRemove {
+                view.removeFromSuperview()
+            }
+        }
+
+        if animateDifferences {
+            UIView.animate(
+                withDuration: configuration.animationDuration,
+                delay: 0,
+                options: configuration.animationOptions,
+                animations: {
+                    showHideViews()
+                    stackView.layoutIfNeeded()
+                },
+                completion: { isComplete in
+                    removeViews()
+                    completion?(isComplete)
+                }
+            )
+        } else {
+            showHideViews()
+            removeViews()
+            completion?(true)
+        }
     }
 }

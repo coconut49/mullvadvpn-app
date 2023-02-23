@@ -1,5 +1,6 @@
 package net.mullvad.mullvadvpn.ui
 
+import android.Manifest
 import android.app.Activity
 import android.app.UiModeManager
 import android.content.Intent
@@ -9,6 +10,11 @@ import android.net.VpnService
 import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentManager
@@ -16,7 +22,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.flowWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
@@ -25,21 +30,36 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import net.mullvad.mullvadvpn.BuildConfig
 import net.mullvad.mullvadvpn.R
+import net.mullvad.mullvadvpn.compose.component.ChangelogDialog
 import net.mullvad.mullvadvpn.dataproxy.MullvadProblemReport
 import net.mullvad.mullvadvpn.di.uiModule
+import net.mullvad.mullvadvpn.lib.endpoint.getApiEndpointConfigurationExtras
 import net.mullvad.mullvadvpn.model.AccountExpiry
 import net.mullvad.mullvadvpn.model.DeviceState
-import net.mullvad.mullvadvpn.ui.fragments.DeviceRevokedFragment
-import net.mullvad.mullvadvpn.ui.serviceconnection.AccountRepository
-import net.mullvad.mullvadvpn.ui.serviceconnection.DeviceRepository
+import net.mullvad.mullvadvpn.repository.AccountRepository
+import net.mullvad.mullvadvpn.repository.DeviceRepository
+import net.mullvad.mullvadvpn.ui.fragment.ConnectFragment
+import net.mullvad.mullvadvpn.ui.fragment.DeviceRevokedFragment
+import net.mullvad.mullvadvpn.ui.fragment.LoadingFragment
+import net.mullvad.mullvadvpn.ui.fragment.LoginFragment
+import net.mullvad.mullvadvpn.ui.fragment.OutOfTimeFragment
+import net.mullvad.mullvadvpn.ui.fragment.WelcomeFragment
 import net.mullvad.mullvadvpn.ui.serviceconnection.ServiceConnectionManager
+import net.mullvad.mullvadvpn.util.SdkUtils.isNotificationPermissionGranted
 import net.mullvad.mullvadvpn.util.UNKNOWN_STATE_DEBOUNCE_DELAY_MILLISECONDS
 import net.mullvad.mullvadvpn.util.addDebounceForUnknownState
+import net.mullvad.mullvadvpn.viewmodel.ChangelogDialogUiState
+import net.mullvad.mullvadvpn.viewmodel.ChangelogViewModel
 import org.koin.android.ext.android.getKoin
 import org.koin.core.context.loadKoinModules
 
 open class MainActivity : FragmentActivity() {
     val problemReport = MullvadProblemReport()
+    private var requestNotificationPermissionLauncher: ActivityResultLauncher<String> =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            // NotificationManager.areNotificationsEnabled is used to check the state rather than
+            // handling the callback value.
+        }
 
     private var visibleSecureScreens = HashSet<Fragment>()
 
@@ -54,6 +74,7 @@ open class MainActivity : FragmentActivity() {
     private lateinit var accountRepository: AccountRepository
     private lateinit var deviceRepository: DeviceRepository
     private lateinit var serviceConnectionManager: ServiceConnectionManager
+    private lateinit var changelogViewModel: ChangelogViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         loadKoinModules(uiModule)
@@ -62,6 +83,7 @@ open class MainActivity : FragmentActivity() {
             accountRepository = get()
             deviceRepository = get()
             serviceConnectionManager = get()
+            changelogViewModel = get()
         }
 
         requestedOrientation = if (deviceIsTv) {
@@ -80,12 +102,17 @@ open class MainActivity : FragmentActivity() {
         setContentView(R.layout.main)
 
         launchDeviceStateHandler()
+        checkForNotificationPermission()
     }
 
     override fun onStart() {
         Log.d("mullvad", "Starting main activity")
         super.onStart()
-        serviceConnectionManager.bind(vpnPermissionRequestHandler = ::requestVpnPermission)
+
+        serviceConnectionManager.bind(
+            vpnPermissionRequestHandler = ::requestVpnPermission,
+            apiEndpointConfiguration = intent?.getApiEndpointConfigurationExtras()
+        )
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, resultData: Intent?) {
@@ -144,7 +171,7 @@ open class MainActivity : FragmentActivity() {
             )
             replace(R.id.main_fragment, SettingsFragment())
             addToBackStack(null)
-            commit()
+            commitAllowingStateLoss()
         }
     }
 
@@ -176,6 +203,31 @@ open class MainActivity : FragmentActivity() {
                     }
                 }
         }
+        lifecycleScope.launch {
+            deviceRepository.deviceState
+                .flowWithLifecycle(lifecycle, Lifecycle.State.RESUMED)
+                .filter { it is DeviceState.LoggedIn || it is DeviceState.LoggedOut }
+                .collect { loadChangelogComponent() }
+        }
+    }
+
+    private fun loadChangelogComponent() {
+        findViewById<ComposeView>(R.id.compose_view).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            setContent {
+                val state = changelogViewModel.changelogDialogUiState.collectAsState().value
+                if (state is ChangelogDialogUiState.Show) {
+                    ChangelogDialog(
+                        changesList = state.changes,
+                        version = BuildConfig.VERSION_NAME,
+                        onDismiss = {
+                            changelogViewModel.dismissChangelogDialog()
+                        }
+                    )
+                }
+            }
+            changelogViewModel.refreshChangelogDialogUiState()
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -187,8 +239,8 @@ open class MainActivity : FragmentActivity() {
 
     private fun openLaunchView() {
         supportFragmentManager.beginTransaction().apply {
-            replace(R.id.main_fragment, LaunchFragment())
-            commit()
+            replace(R.id.main_fragment, LoadingFragment())
+            commitAllowingStateLoss()
         }
     }
 
@@ -214,7 +266,7 @@ open class MainActivity : FragmentActivity() {
 
         supportFragmentManager.beginTransaction().apply {
             replace(R.id.main_fragment, fragment)
-            commit()
+            commitAllowingStateLoss()
         }
     }
 
@@ -231,11 +283,12 @@ open class MainActivity : FragmentActivity() {
         clearBackStack()
         supportFragmentManager.beginTransaction().apply {
             replace(R.id.main_fragment, LoginFragment())
-            commit()
+            commitAllowingStateLoss()
         }
     }
 
     private fun openRevokedView() {
+        clearBackStack()
         supportFragmentManager.beginTransaction().apply {
             setCustomAnimations(
                 R.anim.fragment_enter_from_right,
@@ -244,7 +297,7 @@ open class MainActivity : FragmentActivity() {
                 R.anim.fragment_exit_to_right
             )
             replace(R.id.main_fragment, DeviceRevokedFragment())
-            commit()
+            commitAllowingStateLoss()
         }
     }
 
@@ -254,6 +307,12 @@ open class MainActivity : FragmentActivity() {
                 val firstEntry = getBackStackEntryAt(0)
                 popBackStack(firstEntry.id, FragmentManager.POP_BACK_STACK_INCLUSIVE)
             }
+        }
+    }
+
+    private fun checkForNotificationPermission() {
+        if (isNotificationPermissionGranted().not()) {
+            requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 

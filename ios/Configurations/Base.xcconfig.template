@@ -1,3 +1,5 @@
+#include "Version.xcconfig"
+
 // Development team
 DEVELOPMENT_TEAM = CKG9MXH72F
 
@@ -10,3 +12,7 @@ SECURITY_GROUP_IDENTIFIER = group.net.mullvad.MullvadVPN
 // Code signing style
 // Possible values: Manual or Automatic
 CODE_SIGN_STYLE = Manual
+
+// Code signing identity
+CODE_SIGN_IDENTITY[config=Debug] = Apple Development
+CODE_SIGN_IDENTITY[config=Release] = Apple Distribution

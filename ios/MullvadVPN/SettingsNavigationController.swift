@@ -6,13 +6,12 @@
 //  Copyright © 2020 Mullvad VPN AB. All rights reserved.
 //
 
-import Foundation
 import UIKit
 
 enum SettingsNavigationRoute {
+    case root
     case account
     case preferences
-    case wireguardKeys
     case problemReport
 }
 
@@ -22,10 +21,23 @@ enum SettingsDismissReason {
 }
 
 protocol SettingsNavigationControllerDelegate: AnyObject {
-    func settingsNavigationController(_ controller: SettingsNavigationController, didFinishWithReason reason: SettingsDismissReason)
+    func settingsNavigationController(
+        _ controller: SettingsNavigationController,
+        willNavigateTo route: SettingsNavigationRoute
+    )
+
+    func settingsNavigationController(
+        _ controller: SettingsNavigationController,
+        didFinishWithReason reason: SettingsDismissReason
+    )
 }
 
-class SettingsNavigationController: CustomNavigationController, SettingsViewControllerDelegate, AccountViewControllerDelegate, UIAdaptivePresentationControllerDelegate {
+class SettingsNavigationController: UINavigationController, SettingsViewControllerDelegate,
+    AccountViewControllerDelegate, UIAdaptivePresentationControllerDelegate,
+    UINavigationControllerDelegate
+{
+    private let interactorFactory: SettingsInteractorFactory
+    private var currentRoutes: [SettingsNavigationRoute] = [.root]
 
     weak var settingsDelegate: SettingsNavigationControllerDelegate?
 
@@ -37,72 +49,114 @@ class SettingsNavigationController: CustomNavigationController, SettingsViewCont
         return topViewController
     }
 
-    init() {
+    init(interactorFactory: SettingsInteractorFactory) {
+        self.interactorFactory = interactorFactory
+
         super.init(navigationBarClass: CustomNavigationBar.self, toolbarClass: nil)
-
-        let settingsController = SettingsViewController()
-        settingsController.delegate = self
-
-        pushViewController(settingsController, animated: false)
-    }
-
-    override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
-        // This initializer exists to prevent crash on iOS 12.
-        // See: https://stackoverflow.com/a/38335090/351305
-        super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
-    }
-
-    required init?(coder aDecoder: NSCoder) {
-        super.init(coder: aDecoder)
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
 
         navigationBar.prefersLargeTitles = true
 
-        // Update account expiry
-        TunnelManager.shared.updateAccountData()
+        // Navigation controller ignores `prefersLargeTitles` when using `setViewControllers()`.
+        pushViewController(makeViewController(for: .root), animated: false)
+
+        delegate = self
+    }
+
+    required init?(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    // MARK: - UINavigationControllerDelegate
+
+    func navigationController(
+        _ navigationController: UINavigationController,
+        willShow viewController: UIViewController,
+        animated: Bool
+    ) {
+        let newRoutes = viewControllers.compactMap { route(for: $0) }
+
+        if currentRoutes != newRoutes, let nextRoute = newRoutes.last {
+            currentRoutes = newRoutes
+            settingsDelegate?.settingsNavigationController(self, willNavigateTo: nextRoute)
+        }
     }
 
     // MARK: - SettingsViewControllerDelegate
 
     func settingsViewControllerDidFinish(_ controller: SettingsViewController) {
-        self.settingsDelegate?.settingsNavigationController(self, didFinishWithReason: .none)
+        settingsDelegate?.settingsNavigationController(self, didFinishWithReason: .none)
     }
 
     // MARK: - AccountViewControllerDelegate
 
     func accountViewControllerDidLogout(_ controller: AccountViewController) {
-        self.settingsDelegate?.settingsNavigationController(self, didFinishWithReason: .userLoggedOut)
+        settingsDelegate?.settingsNavigationController(self, didFinishWithReason: .userLoggedOut)
     }
 
     // MARK: - Navigation
 
     func navigate(to route: SettingsNavigationRoute, animated: Bool) {
+        guard route != .root else {
+            popToRootViewController(animated: animated)
+            return
+        }
+
+        settingsDelegate?.settingsNavigationController(self, willNavigateTo: route)
+
         let nextViewController = makeViewController(for: route)
-        if let rootController = self.viewControllers.first, viewControllers.count > 1 {
-            setViewControllers([rootController, nextViewController], animated: animated)
+
+        if let rootController = viewControllers.first, viewControllers.count > 1 {
+            let newChildren = [rootController, nextViewController]
+            let newRoutes = newChildren.compactMap { self.route(for: $0) }
+
+            currentRoutes = newRoutes
+            setViewControllers(newChildren, animated: animated)
         } else {
+            currentRoutes.append(route)
             pushViewController(nextViewController, animated: animated)
         }
     }
 
     private func makeViewController(for route: SettingsNavigationRoute) -> UIViewController {
         switch route {
+        case .root:
+            let controller = SettingsViewController(
+                interactor: interactorFactory.makeSettingsInteractor()
+            )
+            controller.delegate = self
+            return controller
+
         case .account:
-            let controller = AccountViewController()
+            let controller = AccountViewController(
+                interactor: interactorFactory.makeAccountInteractor()
+            )
             controller.delegate = self
             return controller
 
         case .preferences:
-            return PreferencesViewController()
-
-        case .wireguardKeys:
-            return WireguardKeysViewController()
+            return PreferencesViewController(
+                interactor: interactorFactory.makePreferencesInteractor()
+            )
 
         case .problemReport:
-            return ProblemReportViewController()
+            return ProblemReportViewController(
+                interactor: interactorFactory.makeProblemReportInteractor()
+            )
+        }
+    }
+
+    private func route(for viewController: UIViewController) -> SettingsNavigationRoute? {
+        switch viewController {
+        case is SettingsViewController:
+            return .root
+        case is AccountViewController:
+            return .account
+        case is PreferencesViewController:
+            return .preferences
+        case is ProblemReportViewController:
+            return .problemReport
+        default:
+            return nil
         }
     }
 

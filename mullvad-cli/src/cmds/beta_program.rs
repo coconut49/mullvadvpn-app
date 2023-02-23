@@ -1,4 +1,4 @@
-use crate::{new_rpc_client, Command, Error, Result, PRODUCT_VERSION};
+use crate::{new_rpc_client, Command, Error, Result};
 
 pub struct BetaProgram;
 
@@ -18,7 +18,7 @@ impl Command for BetaProgram {
                     .arg(
                         clap::Arg::new("policy")
                             .required(true)
-                            .possible_values(&["on", "off"]),
+                            .possible_values(["on", "off"]),
                     ),
             )
             .subcommand(clap::App::new("get").about("Get beta notifications setting"))
@@ -34,14 +34,14 @@ impl Command for BetaProgram {
                 } else {
                     "off"
                 };
-                println!("Beta program: {}", enabled_str);
+                println!("Beta program: {enabled_str}");
                 Ok(())
             }
             Some(("set", matches)) => {
                 let enable_str = matches.value_of("policy").expect("missing policy");
                 let enable = enable_str == "on";
 
-                if !enable && PRODUCT_VERSION.contains("beta") {
+                if !enable && mullvad_version::VERSION.contains("beta") {
                     return Err(Error::InvalidCommand(
                         "The beta program must be enabled while running a beta version",
                     ));
@@ -50,7 +50,7 @@ impl Command for BetaProgram {
                 let mut rpc = new_rpc_client().await?;
                 rpc.set_show_beta_releases(enable).await?;
 
-                println!("Beta program: {}", enable_str);
+                println!("Beta program: {enable_str}");
                 Ok(())
             }
             _ => {

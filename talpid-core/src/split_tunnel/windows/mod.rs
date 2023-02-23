@@ -1,18 +1,10 @@
 mod driver;
 mod path_monitor;
+mod service;
 mod volume_monitor;
 mod windows;
 
-use crate::{
-    tunnel::TunnelMetadata,
-    tunnel_state_machine::TunnelCommand,
-    windows::{
-        get_ip_address_for_interface,
-        window::{PowerManagementEvent, PowerManagementListener},
-        AddressFamily,
-    },
-    winnet::{self, get_best_default_route, WinNetAddrFamily, WinNetCallbackHandle},
-};
+use crate::{tunnel::TunnelMetadata, tunnel_state_machine::TunnelCommand};
 use futures::channel::{mpsc, oneshot};
 use std::{
     collections::HashMap,
@@ -20,16 +12,17 @@ use std::{
     ffi::{OsStr, OsString},
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    os::windows::io::AsRawHandle,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc as sync_mpsc, Arc, Mutex, RwLock, Weak,
+        mpsc as sync_mpsc, Arc, Mutex, MutexGuard, RwLock, Weak,
     },
     time::Duration,
 };
+use talpid_routing::{get_best_default_route, CallbackHandle, EventType, RouteManagerHandle};
 use talpid_types::{tunnel::ErrorStateCause, ErrorExt};
-use winapi::shared::{ifdef::NET_LUID, winerror::ERROR_OPERATION_ABORTED};
+use talpid_windows_net::{get_ip_address_for_interface, AddressFamily};
+use windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED;
 
 const DRIVER_EVENT_BUFFER_SIZE: usize = 2048;
 const RESERVED_IP_V4: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 123);
@@ -38,9 +31,17 @@ const RESERVED_IP_V4: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 123);
 #[derive(err_derive::Error, Debug)]
 #[error(no_from)]
 pub enum Error {
+    /// Failed to install or start driver service
+    #[error(display = "Failed to start driver service")]
+    ServiceError(#[error(source)] service::Error),
+
     /// Failed to initialize the driver
     #[error(display = "Failed to initialize driver")]
     InitializationError(#[error(source)] driver::DeviceHandleError),
+
+    /// Failed to reset the driver
+    #[error(display = "Failed to reset driver")]
+    ResetError(#[error(source)] io::Error),
 
     /// Failed to set paths to excluded applications
     #[error(display = "Failed to set list of excluded applications")]
@@ -64,11 +65,11 @@ pub enum Error {
 
     /// Failed to obtain default route
     #[error(display = "Failed to obtain the default route")]
-    ObtainDefaultRoute(#[error(source)] winnet::Error),
+    ObtainDefaultRoute(#[error(source)] talpid_routing::Error),
 
     /// Failed to obtain an IP address given a network interface LUID
     #[error(display = "Failed to obtain IP address for interface LUID")]
-    LuidToIp(#[error(source)] crate::windows::Error),
+    LuidToIp(#[error(source)] talpid_windows_net::Error),
 
     /// Failed to set up callback for monitoring default route changes
     #[error(display = "Failed to register default route change callback")]
@@ -106,16 +107,16 @@ pub struct SplitTunnel {
     event_thread: Option<std::thread::JoinHandle<()>>,
     quit_event: Arc<windows::Event>,
     excluded_processes: Arc<RwLock<HashMap<usize, ExcludedProcess>>>,
-    _route_change_callback: Option<WinNetCallbackHandle>,
+    _route_change_callback: Option<CallbackHandle>,
     daemon_tx: Weak<mpsc::UnboundedSender<TunnelCommand>>,
     async_path_update_in_progress: Arc<AtomicBool>,
-    power_mgmt_handle: tokio::task::JoinHandle<()>,
+    route_manager: RouteManagerHandle,
 }
 
 enum Request {
     SetPaths(Vec<OsString>),
     RegisterIps(InterfaceAddresses),
-    Restart,
+    Stop,
 }
 type RequestResponseTx = sync_mpsc::Sender<Result<(), Error>>;
 type RequestTx = sync_mpsc::Sender<(Request, RequestResponseTx)>;
@@ -172,20 +173,18 @@ impl SplitTunnel {
     /// Initialize the split tunnel device.
     pub fn new(
         runtime: tokio::runtime::Handle,
+        resource_dir: PathBuf,
         daemon_tx: Weak<mpsc::UnboundedSender<TunnelCommand>>,
         volume_update_rx: mpsc::UnboundedReceiver<()>,
-        power_mgmt_rx: PowerManagementListener,
+        route_manager: RouteManagerHandle,
     ) -> Result<Self, Error> {
         let excluded_processes = Arc::new(RwLock::new(HashMap::new()));
 
         let (request_tx, handle) =
-            Self::spawn_request_thread(volume_update_rx, excluded_processes.clone())?;
+            Self::spawn_request_thread(resource_dir, volume_update_rx, excluded_processes.clone())?;
 
         let (event_thread, quit_event) =
             Self::spawn_event_listener(handle, excluded_processes.clone())?;
-
-        let power_mgmt_handle =
-            Self::spawn_power_management_monitor(request_tx.clone(), power_mgmt_rx);
 
         Ok(SplitTunnel {
             runtime,
@@ -196,7 +195,7 @@ impl SplitTunnel {
             daemon_tx,
             async_path_update_in_progress: Arc::new(AtomicBool::new(false)),
             excluded_processes,
-            power_mgmt_handle,
+            route_manager,
         })
     }
 
@@ -254,10 +253,8 @@ impl SplitTunnel {
         overlapped: &mut windows::Overlapped,
         data_buffer: &mut Vec<u8>,
     ) -> io::Result<EventResult> {
-        if unsafe {
-            driver::wait_for_single_object(quit_event.as_raw_handle(), Some(Duration::ZERO))
-        }
-        .is_ok()
+        if unsafe { driver::wait_for_single_object(quit_event.as_handle(), Some(Duration::ZERO)) }
+            .is_ok()
         {
             return Ok(EventResult::Quit);
         }
@@ -283,8 +280,8 @@ impl SplitTunnel {
         })?;
 
         let event_objects = [
-            overlapped.get_event().unwrap().as_raw_handle(),
-            quit_event.as_raw_handle(),
+            overlapped.get_event().unwrap().as_handle(),
+            quit_event.as_handle(),
         ];
 
         let signaled_object =
@@ -298,7 +295,7 @@ impl SplitTunnel {
                 },
             )?;
 
-        if signaled_object == quit_event.as_raw_handle() {
+        if signaled_object == quit_event.as_handle() {
             // Quit event was signaled
             return Ok(EventResult::Quit);
         }
@@ -401,6 +398,7 @@ impl SplitTunnel {
     }
 
     fn spawn_request_thread(
+        resource_dir: PathBuf,
         volume_update_rx: mpsc::UnboundedReceiver<()>,
         excluded_processes: Arc<RwLock<HashMap<usize, ExcludedProcess>>>,
     ) -> Result<(RequestTx, Arc<driver::DeviceHandle>), Error> {
@@ -422,10 +420,14 @@ impl SplitTunnel {
         );
 
         std::thread::spawn(move || {
-            let result = driver::DeviceHandle::new()
-                .map(Arc::new)
-                .map_err(Error::InitializationError);
-            let handle = match result {
+            let init_fn = || {
+                service::install_driver_if_required(&resource_dir).map_err(Error::ServiceError)?;
+                driver::DeviceHandle::new()
+                    .map(Arc::new)
+                    .map_err(Error::InitializationError)
+            };
+
+            let handle = match init_fn() {
                 Ok(handle) => {
                     let _ = init_tx.send(Ok(handle.clone()));
                     handle
@@ -483,41 +485,19 @@ impl SplitTunnel {
                             result
                         }
                     }
-                    Request::Restart => {
-                        let monitored_paths_guard = monitored_paths.lock().unwrap();
-                        (|| {
-                            let state = handle.get_driver_state().map_err(Error::GetState)?;
-                            if state == driver::DriverState::Engaged {
-                                // Leaving the engaged state risks leaking traffic into the tunnel,
-                                // so err on the safe side.
-                                log::warn!(
-                                    "Not resetting driver state because it is currently engaged"
-                                );
-                                return Err(Error::CannotResetEngaged);
-                            }
+                    Request::Stop => {
+                        if let Err(error) = handle.reset().map_err(Error::ResetError) {
+                            let _ = response_tx.send(Err(error));
+                            continue;
+                        }
 
-                            handle.reinitialize().map_err(Error::InitializationError)?;
+                        monitored_paths.lock().unwrap().clear();
+                        excluded_processes.write().unwrap().clear();
 
-                            {
-                                excluded_processes.write().unwrap().clear();
-                            }
+                        let _ = response_tx.send(Ok(()));
 
-                            handle
-                                .register_ips(
-                                    previous_addresses.tunnel_ipv4,
-                                    previous_addresses.tunnel_ipv6,
-                                    previous_addresses.internet_ipv4,
-                                    previous_addresses.internet_ipv6,
-                                )
-                                .map_err(Error::RegisterIps)?;
-
-                            if monitored_paths_guard.len() > 0 {
-                                handle
-                                    .set_config(&*monitored_paths_guard)
-                                    .map_err(Error::SetConfiguration)?;
-                            }
-                            Ok(())
-                        })()
+                        // Stop listening to commands
+                        break;
                     }
                 };
                 if response_tx.send(response).is_err() {
@@ -530,6 +510,16 @@ impl SplitTunnel {
                 log::error!(
                     "{}",
                     error.display_chain_with_msg("Failed to shut down path monitor")
+                );
+            }
+
+            drop(handle);
+
+            log::debug!("Stopping ST service");
+            if let Err(error) = service::stop_driver_service() {
+                log::error!(
+                    "{}",
+                    error.display_chain_with_msg("Failed to stop ST service")
                 );
             }
         });
@@ -575,34 +565,6 @@ impl SplitTunnel {
         response_rx
             .recv_timeout(REQUEST_TIMEOUT)
             .map_err(|_| Error::RequestThreadStuck)?
-    }
-
-    fn spawn_power_management_monitor(
-        request_tx: RequestTx,
-        mut power_mgmt_rx: PowerManagementListener,
-    ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            while let Some(event) = power_mgmt_rx.next().await {
-                match event {
-                    PowerManagementEvent::ResumeAutomatic => {
-                        let tx = request_tx.clone();
-                        tokio::task::spawn_blocking(move || {
-                            std::thread::sleep(Duration::from_secs(1));
-                            if let Err(error) =
-                                SplitTunnel::send_request_inner(&tx, Request::Restart)
-                            {
-                                log::error!(
-                                    "{}",
-                                    error
-                                        .display_chain_with_msg("Failed to reinitialize ST module")
-                                );
-                            }
-                        });
-                    }
-                    _ => (),
-                }
-            }
-        })
     }
 
     /// Set a list of applications to exclude from the tunnel.
@@ -676,19 +638,42 @@ impl SplitTunnel {
         ));
 
         self._route_change_callback = None;
-        let mut context = context_mutex.lock().unwrap();
-        let callback = winnet::add_default_route_change_callback(
-            Some(split_tunnel_default_route_change_handler),
-            context_mutex.clone(),
-        )
-        .map(Some)
-        .map_err(|_| Error::RegisterRouteChangeCallback)?;
+        let moved_context_mutex = context_mutex.clone();
+        let context = context_mutex.lock().unwrap();
+        let callback = self
+            .runtime
+            .block_on(
+                self.route_manager
+                    .add_default_route_change_callback(Box::new(move |event, addr_family| {
+                        split_tunnel_default_route_change_handler(
+                            event,
+                            addr_family,
+                            &moved_context_mutex,
+                        )
+                    })),
+            )
+            .map(Some)
+            // NOTE: This cannot fail if a callback is created. If that assumption is wrong, this
+            // could deadlock if the dropped callback is invoked (see `init_context`).
+            .map_err(|_| Error::RegisterRouteChangeCallback)?;
 
-        context.initialize_internet_addresses()?;
-        context.register_ips()?;
+        Self::init_context(context)?;
         self._route_change_callback = callback;
 
         Ok(())
+    }
+
+    fn init_context(
+        mut context: MutexGuard<'_, SplitTunnelDefaultRouteChangeHandlerContext>,
+    ) -> Result<(), Error> {
+        // NOTE: This should remain a separate function. Dropping the context after `callback`
+        // causes a deadlock if `split_tunnel_default_route_change_handler` is called at the same
+        // time (i.e. if a route change has occurred), since it waits on the context and
+        // `CallbackHandle::drop` also waits for `split_tunnel_default_route_change_handler`
+        // to complete.
+
+        context.initialize_internet_addresses()?;
+        context.register_ips()
     }
 
     /// Instructs the driver to stop redirecting tunnel traffic and INADDR_ANY.
@@ -707,8 +692,6 @@ impl SplitTunnel {
 
 impl Drop for SplitTunnel {
     fn drop(&mut self) {
-        self.power_mgmt_handle.abort();
-
         if let Some(_event_thread) = self.event_thread.take() {
             if let Err(error) = self.quit_event.set() {
                 log::error!(
@@ -719,9 +702,11 @@ impl Drop for SplitTunnel {
             // Not joining `event_thread`: It may be unresponsive.
         }
 
-        let paths: [&OsStr; 0] = [];
-        if let Err(error) = self.set_paths_sync(&paths) {
-            log::error!("{}", error.display_chain());
+        if let Err(error) = self.send_request(Request::Stop) {
+            log::error!(
+                "{}",
+                error.display_chain_with_msg("Failed to stop ST driver service")
+            );
         }
     }
 }
@@ -760,16 +745,10 @@ impl SplitTunnelDefaultRouteChangeHandlerContext {
 
     pub fn initialize_internet_addresses(&mut self) -> Result<(), Error> {
         // Identify IP address that gives us Internet access
-        let internet_ipv4 = get_best_default_route(WinNetAddrFamily::IPV4)
+        let internet_ipv4 = get_best_default_route(AddressFamily::Ipv4)
             .map_err(Error::ObtainDefaultRoute)?
             .map(|route| {
-                get_ip_address_for_interface(
-                    AddressFamily::Ipv4,
-                    NET_LUID {
-                        Value: route.interface_luid,
-                    },
-                )
-                .map(|ip| match ip {
+                get_ip_address_for_interface(AddressFamily::Ipv4, route.iface).map(|ip| match ip {
                     Some(IpAddr::V4(addr)) => Some(addr),
                     Some(_) => unreachable!("wrong address family (expected IPv4)"),
                     None => {
@@ -781,16 +760,10 @@ impl SplitTunnelDefaultRouteChangeHandlerContext {
             .transpose()
             .map_err(Error::LuidToIp)?
             .flatten();
-        let internet_ipv6 = get_best_default_route(WinNetAddrFamily::IPV6)
+        let internet_ipv6 = get_best_default_route(AddressFamily::Ipv6)
             .map_err(Error::ObtainDefaultRoute)?
             .map(|route| {
-                get_ip_address_for_interface(
-                    AddressFamily::Ipv6,
-                    NET_LUID {
-                        Value: route.interface_luid,
-                    },
-                )
-                .map(|ip| match ip {
+                get_ip_address_for_interface(AddressFamily::Ipv6, route.iface).map(|ip| match ip {
                     Some(IpAddr::V6(addr)) => Some(addr),
                     Some(_) => unreachable!("wrong address family (expected IPv6)"),
                     None => {
@@ -810,16 +783,14 @@ impl SplitTunnelDefaultRouteChangeHandlerContext {
     }
 }
 
-unsafe extern "system" fn split_tunnel_default_route_change_handler(
-    event_type: winnet::WinNetDefaultRouteChangeEventType,
-    address_family: WinNetAddrFamily,
-    default_route: winnet::WinNetDefaultRoute,
-    ctx: *mut libc::c_void,
+fn split_tunnel_default_route_change_handler<'a>(
+    event_type: EventType<'a>,
+    address_family: AddressFamily,
+    ctx_mutex: &Arc<Mutex<SplitTunnelDefaultRouteChangeHandlerContext>>,
 ) {
-    use winnet::WinNetDefaultRouteChangeEventType::*;
+    use talpid_routing::EventType::*;
 
     // Update the "internet interface" IP when best default route changes
-    let ctx_mutex = &mut *(ctx as *mut Arc<Mutex<SplitTunnelDefaultRouteChangeHandlerContext>>);
     let mut ctx = ctx_mutex.lock().expect("ST route handler mutex poisoned");
 
     let daemon_tx = ctx.daemon_tx.upgrade();
@@ -829,16 +800,9 @@ unsafe extern "system" fn split_tunnel_default_route_change_handler(
         }
     };
 
-    let translated_family = winnet_to_talpid_family(address_family);
-
     let result = match event_type {
-        DefaultRouteChanged | DefaultRouteUpdatedDetails => {
-            match get_ip_address_for_interface(
-                translated_family,
-                NET_LUID {
-                    Value: default_route.interface_luid,
-                },
-            ) {
+        Updated(default_route) | UpdatedDetails(default_route) => {
+            match get_ip_address_for_interface(address_family, default_route.iface) {
                 Ok(Some(ip)) => match IpAddr::from(ip) {
                     IpAddr::V4(addr) => ctx.addresses.internet_ipv4 = Some(addr),
                     IpAddr::V6(addr) => ctx.addresses.internet_ipv6 = Some(addr),
@@ -846,10 +810,10 @@ unsafe extern "system" fn split_tunnel_default_route_change_handler(
                 Ok(None) => {
                     log::warn!("Failed to obtain default route interface address");
                     match address_family {
-                        WinNetAddrFamily::IPV4 => {
+                        AddressFamily::Ipv4 => {
                             ctx.addresses.internet_ipv4 = None;
                         }
-                        WinNetAddrFamily::IPV6 => {
+                        AddressFamily::Ipv6 => {
                             ctx.addresses.internet_ipv6 = None;
                         }
                     }
@@ -869,12 +833,12 @@ unsafe extern "system" fn split_tunnel_default_route_change_handler(
             ctx.register_ips()
         }
         // no default route
-        DefaultRouteRemoved => {
+        Removed => {
             match address_family {
-                WinNetAddrFamily::IPV4 => {
+                AddressFamily::Ipv4 => {
                     ctx.addresses.internet_ipv4 = None;
                 }
-                WinNetAddrFamily::IPV6 => {
+                AddressFamily::Ipv6 => {
                     ctx.addresses.internet_ipv6 = None;
                 }
             }
@@ -888,12 +852,5 @@ unsafe extern "system" fn split_tunnel_default_route_change_handler(
             error.display_chain_with_msg("Failed to register new addresses in split tunnel driver")
         );
         maybe_send(TunnelCommand::Block(ErrorStateCause::SplitTunnelError));
-    }
-}
-
-fn winnet_to_talpid_family(address_family: WinNetAddrFamily) -> AddressFamily {
-    match address_family {
-        WinNetAddrFamily::IPV4 => AddressFamily::Ipv4,
-        WinNetAddrFamily::IPV6 => AddressFamily::Ipv6,
     }
 }

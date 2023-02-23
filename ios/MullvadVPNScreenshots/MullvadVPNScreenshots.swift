@@ -9,18 +9,20 @@
 import XCTest
 
 class MullvadVPNScreenshots: XCTestCase {
-
     override func setUp() {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
+        // Put setup code here. This method is called before the invocation of
+        // each test method in the class.
 
         // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
 
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
+        // In UI tests it’s important to set the initial state - such as interface orientation -
+        // required for your tests before they run. The setUp method is a good place to do this.
     }
 
     override func tearDown() {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
+        // Put teardown code here. This method is called after the invocation of
+        // each test method in the class.
     }
 
     func testTakeScreenshots() {
@@ -87,11 +89,18 @@ class MullvadVPNScreenshots: XCTestCase {
         // Open Settings
         app.buttons["SettingsButton"].tap()
 
-        // Tap on WireGuard key cell
-        _ = app.tables.cells["WireGuardKeyCell"].waitForExistence(timeout: 2)
-        app.tables.cells["WireGuardKeyCell"].tap()
+        // Tap on preferences cell
+        _ = app.tables.cells["PreferencesCell"].waitForExistence(timeout: 2)
+        app.tables.cells["PreferencesCell"].tap()
 
-        snapshot("WireGuardKeys")
+        app.tables.element
+            .cells
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "mullvadDNS"))
+            .switches
+            .matching(NSPredicate(format: "value = %@", "0"))
+            .allElementsBoundByAccessibilityElement
+            .forEach { $0.tap() }
+        snapshot("Preferences")
 
         // Tap back button
         app.navigationBars.buttons.firstMatch.tap()
@@ -99,6 +108,17 @@ class MullvadVPNScreenshots: XCTestCase {
         // Tap "Account" cell
         _ = app.tables.cells["AccountCell"].waitForExistence(timeout: 2)
         app.tables.cells["AccountCell"].tap()
+
+        // Wait for StoreKit to fetch subscriptions
+        _ = app.buttons["PurchaseButton"].waitForExistence(timeout: 2)
+
+        wait(for: [
+            expectation(
+                for: NSPredicate(format: "isEnabled = YES"),
+                evaluatedWith: app.buttons["PurchaseButton"]
+            ),
+        ], timeout: 10)
+        snapshot("Account")
 
         // Hit "Log out" button
         _ = app.buttons["LogoutButton"].waitForExistence(timeout: 2)

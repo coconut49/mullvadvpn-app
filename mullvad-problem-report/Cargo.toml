@@ -1,6 +1,6 @@
 [package]
 name = "mullvad-problem-report"
-version = "2022.3.0-beta3"
+version = "0.0.0"
 authors = ["Mullvad VPN"]
 description = "Collect Mullvad VPN logs into a report and send it to support"
 license = "GPL-3.0"
@@ -8,9 +8,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-clap = { version = "3.0", features = ["cargo"] }
 dirs-next = "2.0"
-env_logger = "0.8.2"
 err-derive = "0.3.1"
 lazy_static = "1.0"
 log = "0.4"
@@ -20,22 +18,31 @@ tokio = { version = "1.8", features = ["rt"] }
 
 mullvad-paths = { path = "../mullvad-paths" }
 mullvad-api = { path = "../mullvad-api" }
+mullvad-version = { path = "../mullvad-version" }
 talpid-types = { path = "../talpid-types" }
 talpid-platform-metadata = { path = "../talpid-platform-metadata" }
 
+[target.'cfg(not(target_os="android"))'.dependencies]
+clap = { version = "3.0", features = ["cargo"] }
+env_logger = "0.10.0"
 
 [target.'cfg(target_os = "android")'.dependencies]
 duct = "0.13"
 
-
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
-winapi = "0.3"
+mullvad-version = { path = "../mullvad-version" }
+
+[target.'cfg(windows)'.build-dependencies.windows-sys]
+version = "0.42.0"
+features = [
+    "Win32_System_SystemServices",
+]
 
 
 [package.metadata.winres]
 ProductName = "Mullvad VPN"
 CompanyName = "Mullvad VPN AB"
-LegalCopyright = "(c) 2022 Mullvad VPN AB"
+LegalCopyright = "(c) 2023 Mullvad VPN AB"
 InternalName = "mullvad-problem-report"
 OriginalFilename = "mullvad-problem-report.exe"

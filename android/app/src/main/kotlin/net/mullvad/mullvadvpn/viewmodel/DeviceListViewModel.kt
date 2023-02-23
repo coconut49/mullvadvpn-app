@@ -23,7 +23,7 @@ import net.mullvad.mullvadvpn.compose.state.DeviceListUiState
 import net.mullvad.mullvadvpn.model.Device
 import net.mullvad.mullvadvpn.model.DeviceList
 import net.mullvad.mullvadvpn.model.RemoveDeviceResult
-import net.mullvad.mullvadvpn.ui.serviceconnection.DeviceRepository
+import net.mullvad.mullvadvpn.repository.DeviceRepository
 
 typealias DeviceId = String
 
@@ -51,15 +51,20 @@ class DeviceListViewModel(
         } else {
             cachedDeviceList
         }
-        val deviceUiItems = devices?.map { device ->
-            DeviceListItemUiState(device, loadingDevices.any { device.id == it })
-        } ?: emptyList()
+        val deviceUiItems = devices?.sortedBy { it.creationDate }?.map { device ->
+            DeviceListItemUiState(
+                device,
+                loadingDevices.any { loadingDevice ->
+                    device.id == loadingDevice
+                }
+            )
+        }
         val isLoading = devices == null
         val stagedDevice = devices?.firstOrNull { device ->
             device.id == stagedDeviceId
         }
         DeviceListUiState(
-            deviceUiItems = deviceUiItems,
+            deviceUiItems = deviceUiItems ?: emptyList(),
             isLoading = isLoading,
             stagedDevice = stagedDevice
         )

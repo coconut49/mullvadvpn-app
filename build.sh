@@ -17,7 +17,9 @@ source scripts/utils/log
 RUSTC_VERSION=$(rustc --version)
 CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-"target"}
 
-PRODUCT_VERSION=$(cd gui/; node -p "require('./package.json').version" | sed -Ee 's/\.0//g')
+echo "Computing build version..."
+PRODUCT_VERSION=$(cargo run -q --bin mullvad-version)
+log_header "Building Mullvad VPN $PRODUCT_VERSION"
 
 # If compiler optimization and artifact compression should be turned on or not
 OPTIMIZE="false"
@@ -51,10 +53,7 @@ done
 # Everything that is not a release build is called a "dev build" and has "-dev-{commit hash}"
 # appended to the version name.
 IS_RELEASE="false"
-product_version_commit_hash=$(git rev-parse "$PRODUCT_VERSION^{commit}" || echo "")
-current_head_commit_hash=$(git rev-parse "HEAD^{commit}")
-if [[ "$SIGN" == "true" && "$OPTIMIZE" == "true" && \
-      $product_version_commit_hash == "$current_head_commit_hash" ]]; then
+if [[ "$SIGN" == "true" && "$OPTIMIZE" == "true" && "$PRODUCT_VERSION" != *"-dev-"* ]]; then
     IS_RELEASE="true"
 fi
 
@@ -65,7 +64,16 @@ fi
 CARGO_ARGS=()
 NPM_PACK_ARGS=()
 
+if [[ -n ${TARGETS:-""} ]]; then
+    NPM_PACK_ARGS+=(--targets "${TARGETS[*]}")
+fi
+
 if [[ "$UNIVERSAL" == "true" ]]; then
+    if [[ -n ${TARGETS:-""} ]]; then
+        log_error "'TARGETS' and '--universal' cannot be specified simultaneously."
+        exit 1
+    fi
+
     TARGETS=(x86_64-apple-darwin aarch64-apple-darwin)
     NPM_PACK_ARGS+=(--universal)
 fi
@@ -126,8 +134,6 @@ if [[ "$IS_RELEASE" == "true" ]]; then
     # Will not allow an outdated lockfile in releases
     CARGO_ARGS+=(--locked)
 else
-    PRODUCT_VERSION="$PRODUCT_VERSION-dev-${current_head_commit_hash:0:6}"
-
     # Allow dev builds to override which API server to use at runtime.
     CARGO_ARGS+=(--features api-override)
 
@@ -146,22 +152,6 @@ fi
 ################################################################################
 # Compile and build
 ################################################################################
-
-log_header "Building Mullvad VPN $PRODUCT_VERSION"
-
-function restore_metadata_backups {
-    pushd "$SCRIPT_DIR" > /dev/null
-    log_info "Restoring version metadata files..."
-    ./version-metadata.sh restore-backup --desktop
-    mv Cargo.lock.bak Cargo.lock || true
-    popd > /dev/null
-}
-trap 'restore_metadata_backups' EXIT
-
-log_info "Updating version in metadata files..."
-cp Cargo.lock Cargo.lock.bak
-./version-metadata.sh inject "$PRODUCT_VERSION" --desktop
-
 
 # Sign all binaries passed as arguments to this function
 function sign_win {
@@ -197,8 +187,13 @@ function sign_win {
 function build {
     local current_target=${1:-""}
     local for_target_string=""
+    local stripbin="strip"
     if [[ -n $current_target ]]; then
         for_target_string=" for $current_target"
+
+        if [[ "$current_target" == "aarch64-unknown-linux-gnu" && "$(uname -m)" != "aarch64" ]]; then
+            stripbin="aarch64-linux-gnu-strip"
+        fi
     fi
 
     ################################################################################
@@ -255,8 +250,8 @@ function build {
 
     if [[ -n $current_target ]]; then
         local cargo_output_dir="$CARGO_TARGET_DIR/$current_target/$RUST_BUILD_MODE"
-        # To make it easier to package universal builds on macOS the binaries are located in a
-        # directory with the name of the target triple.
+        # To make it easier to package multiple targets, the binaries are
+        # located in a directory with the name of the target triple.
         local destination_dir="dist-assets/$current_target"
         mkdir -p "$destination_dir"
     else
@@ -273,7 +268,7 @@ function build {
             cp "$source" "$destination"
         else
             log_info "Stripping $source => $destination"
-            strip "$source" -o "$destination"
+            "${stripbin}" "$source" -o "$destination"
         fi
 
         if [[ "$SIGN" == "true" && "$(uname -s)" == "MINGW"* ]]; then
@@ -289,7 +284,6 @@ if [[ "$(uname -s)" == "MINGW"* ]]; then
     if [[ "$SIGN" == "true" ]]; then
         CPP_BINARIES=(
             "windows/winfw/bin/x64-$CPP_BUILD_MODE/winfw.dll"
-            "windows/winnet/bin/x64-$CPP_BUILD_MODE/winnet.dll"
             "windows/driverlogic/bin/x64-$CPP_BUILD_MODE/driverlogic.exe"
             # The nsis plugin is always built in 32 bit release mode
             windows/nsis-plugins/bin/Win32-Release/*.dll
@@ -322,16 +316,16 @@ fi
 log_header "Preparing for packaging Mullvad VPN $PRODUCT_VERSION"
 
 if [[ "$(uname -s)" == "Darwin" || "$(uname -s)" == "Linux" ]]; then
-    mkdir -p "dist-assets/shell-completions"
+    mkdir -p "build/shell-completions"
     for sh in bash zsh fish; do
         log_info "Generating shell completion script for $sh..."
         cargo run --bin mullvad "${CARGO_ARGS[@]}" -- shell-completions "$sh" \
-            "dist-assets/shell-completions/"
+            "build/shell-completions/"
     done
 fi
 
 log_info "Updating relays.json..."
-cargo run --bin relay_list "${CARGO_ARGS[@]}" > dist-assets/relays.json
+cargo run --bin relay_list "${CARGO_ARGS[@]}" > build/relays.json
 
 
 log_header "Installing JavaScript dependencies"
@@ -346,20 +340,15 @@ case "$(uname -s)" in
     Darwin*)    npm run pack:mac -- "${NPM_PACK_ARGS[@]}";;
     MINGW*)     npm run pack:win -- "${NPM_PACK_ARGS[@]}";;
 esac
-
 popd
 
-SEMVER_VERSION=$(echo "$PRODUCT_VERSION" | sed -Ee 's/($|-.*)/.0\1/g')
-for semver_path in dist/*"$SEMVER_VERSION"*; do
-    product_path=$(echo "$semver_path" | sed -Ee "s/$SEMVER_VERSION/$PRODUCT_VERSION/g")
-    log_info "Moving $semver_path -> $product_path"
-    mv "$semver_path" "$product_path"
-
-    if [[ "$SIGN" == "true" && "$(uname -s)" == "MINGW"* && "$product_path" == *.exe ]]; then
-        # sign installer
-        sign_win "$product_path"
-    fi
-done
+# sign installer on Windows
+if [[ "$SIGN" == "true" && "$(uname -s)" == "MINGW"* ]]; then
+    for installer_path in dist/*"$PRODUCT_VERSION"*.exe; do
+        log_info "Signing $installer_path"
+        sign_win "$installer_path"
+    done
+fi
 
 log_success "**********************************"
 log_success ""

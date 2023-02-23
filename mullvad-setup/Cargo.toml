@@ -1,6 +1,6 @@
 [package]
 name = "mullvad-setup"
-version = "2022.3.0-beta3"
+version = "0.0.0"
 authors = ["Mullvad VPN"]
 description = "Tool used to manage daemon setup"
 license = "GPL-3.0"
@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "3.0", features = ["cargo"] }
-env_logger = "0.8.2"
+env_logger = "0.10.0"
 err-derive = "0.3.1"
 lazy_static = "1.1.0"
 
@@ -25,20 +25,6 @@ mullvad-daemon = { path = "../mullvad-daemon" }
 mullvad-paths = { path = "../mullvad-paths" }
 mullvad-api = { path = "../mullvad-api" }
 mullvad-types = { path = "../mullvad-types" }
+mullvad-version = { path = "../mullvad-version" }
 talpid-core = { path = "../talpid-core" }
 talpid-types = { path = "../talpid-types" }
-
-[target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3.6", features = ["securitybaseapi", "impl-default", "impl-debug", "handleapi", "psapi"]}
-widestring = "0.5"
-
-[target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
-winapi = "0.3"
-
-[package.metadata.winres]
-ProductName = "Mullvad VPN"
-CompanyName = "Mullvad VPN AB"
-LegalCopyright = "(c) 2022 Mullvad VPN AB"
-InternalName = "mullvad-setup"
-OriginalFilename = "mullvad-setup.exe"

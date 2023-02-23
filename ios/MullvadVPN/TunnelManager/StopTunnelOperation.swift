@@ -7,17 +7,17 @@
 //
 
 import Foundation
+import Operations
 
-class StopTunnelOperation: ResultOperation<(), TunnelManager.Error> {
-    private let state: TunnelManager.State
+class StopTunnelOperation: ResultOperation<Void, Error> {
+    private let interactor: TunnelInteractor
 
     init(
         dispatchQueue: DispatchQueue,
-        state: TunnelManager.State,
+        interactor: TunnelInteractor,
         completionHandler: @escaping CompletionHandler
-    )
-    {
-        self.state = state
+    ) {
+        self.interactor = interactor
 
         super.init(
             dispatchQueue: dispatchQueue,
@@ -27,25 +27,27 @@ class StopTunnelOperation: ResultOperation<(), TunnelManager.Error> {
     }
 
     override func main() {
-        guard let tunnel = state.tunnel else {
-            finish(completion: .failure(.unsetTunnel))
-            return
-        }
-
-        switch state.tunnelStatus.state {
+        switch interactor.tunnelStatus.state {
         case .disconnecting(.reconnect):
-            state.tunnelStatus.state = .disconnecting(.nothing)
+            interactor.updateTunnelStatus { tunnelStatus in
+                tunnelStatus.state = .disconnecting(.nothing)
+            }
 
             finish(completion: .success(()))
 
-        case .connected, .connecting, .reconnecting:
+        case .connected, .connecting, .reconnecting, .waitingForConnectivity:
+            guard let tunnel = interactor.tunnel else {
+                finish(completion: .failure(UnsetTunnelError()))
+                return
+            }
+
             // Disable on-demand when stopping the tunnel to prevent it from coming back up
             tunnel.isOnDemandEnabled = false
 
             tunnel.saveToPreferences { error in
                 self.dispatchQueue.async {
                     if let error = error {
-                        self.finish(completion: .failure(.saveVPNConfiguration(error)))
+                        self.finish(completion: .failure(error))
                     } else {
                         tunnel.stop()
                         self.finish(completion: .success(()))
@@ -53,7 +55,7 @@ class StopTunnelOperation: ResultOperation<(), TunnelManager.Error> {
                 }
             }
 
-        default:
+        case .disconnected, .disconnecting, .pendingReconnect:
             finish(completion: .success(()))
         }
     }

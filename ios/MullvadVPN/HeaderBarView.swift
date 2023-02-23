@@ -11,7 +11,7 @@ import UIKit
 
 class HeaderBarView: UIView {
     private let brandNameImage = UIImage(named: "LogoText")?
-        .backport_withTintColor(UIColor.HeaderBar.brandNameColor, renderingMode: .alwaysOriginal)
+        .withTintColor(UIColor.HeaderBar.brandNameColor, renderingMode: .alwaysOriginal)
 
     let logoImageView: UIImageView = {
         let imageView = UIImageView(image: UIImage(named: "LogoIcon"))
@@ -30,10 +30,16 @@ class HeaderBarView: UIView {
 
     class func makeSettingsButton() -> HeaderBarButton {
         let settingsImage = UIImage(named: "IconSettings")?
-            .backport_withTintColor(UIColor.HeaderBar.buttonColor, renderingMode: .alwaysOriginal)
+            .withTintColor(UIColor.HeaderBar.buttonColor, renderingMode: .alwaysOriginal)
+        let disabledSettingsImage = UIImage(named: "IconSettings")?
+            .withTintColor(
+                UIColor.HeaderBar.disabledButtonColor,
+                renderingMode: .alwaysOriginal
+            )
 
         let settingsButton = HeaderBarButton(type: .system)
         settingsButton.setImage(settingsImage, for: .normal)
+        settingsButton.setImage(disabledSettingsImage, for: .disabled)
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
         settingsButton.accessibilityIdentifier = "SettingsButton"
         settingsButton.accessibilityLabel = NSLocalizedString(
@@ -71,9 +77,7 @@ class HeaderBarView: UIView {
             right: UIMetrics.contentLayoutMargins.right
         )
 
-        if #available(iOS 13.0, *) {
-            accessibilityContainerType = .semanticGroup
-        }
+        accessibilityContainerType = .semanticGroup
 
         let imageSize = brandNameImage?.size ?? .zero
         let brandNameAspectRatio = imageSize.width / max(imageSize.height, 1)
@@ -82,17 +86,35 @@ class HeaderBarView: UIView {
             logoImageView.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
             logoImageView.centerYAnchor.constraint(equalTo: brandNameImageView.centerYAnchor),
             logoImageView.widthAnchor.constraint(equalToConstant: 44),
-            logoImageView.heightAnchor.constraint(equalTo: logoImageView.widthAnchor, multiplier: 1),
+            logoImageView.heightAnchor.constraint(
+                equalTo: logoImageView.widthAnchor,
+                multiplier: 1
+            ),
 
-            brandNameImageView.leadingAnchor.constraint(equalTo: logoImageView.trailingAnchor, constant: 9),
-            brandNameImageView.topAnchor.constraint(equalTo: layoutMarginsGuide.topAnchor, constant: 22),
-            brandNameImageView.widthAnchor.constraint(equalTo: brandNameImageView.heightAnchor, multiplier: brandNameAspectRatio),
+            brandNameImageView.leadingAnchor.constraint(
+                equalTo: logoImageView.trailingAnchor,
+                constant: 9
+            ),
+            brandNameImageView.topAnchor.constraint(
+                equalTo: layoutMarginsGuide.topAnchor,
+                constant: 22
+            ),
+            brandNameImageView.widthAnchor.constraint(
+                equalTo: brandNameImageView.heightAnchor,
+                multiplier: brandNameAspectRatio
+            ),
             brandNameImageView.heightAnchor.constraint(equalToConstant: 18),
-            layoutMarginsGuide.bottomAnchor.constraint(equalTo: brandNameImageView.bottomAnchor, constant: 22),
+            layoutMarginsGuide.bottomAnchor.constraint(
+                equalTo: brandNameImageView.bottomAnchor,
+                constant: 22
+            ),
 
-            settingsButton.leadingAnchor.constraint(greaterThanOrEqualTo: brandNameImageView.trailingAnchor, constant: 8),
+            settingsButton.leadingAnchor.constraint(
+                greaterThanOrEqualTo: brandNameImageView.trailingAnchor,
+                constant: 8
+            ),
             settingsButton.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
-            settingsButton.centerYAnchor.constraint(equalTo: brandNameImageView.centerYAnchor)
+            settingsButton.centerYAnchor.constraint(equalTo: brandNameImageView.centerYAnchor),
         ]
 
         [logoImageView, brandNameImageView, settingsButton].forEach { addSubview($0) }

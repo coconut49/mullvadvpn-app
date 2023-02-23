@@ -68,7 +68,7 @@ fn create_bridge_set_subcommand() -> clap::App<'static> {
                 .arg(
                     clap::Arg::new("ownership")
                         .help("Ownership preference, or 'any' for no preference.")
-                        .possible_values(&["any", "owned", "rented"])
+                        .possible_values(["any", "owned", "rented"])
                         .required(true),
                 ),
         )
@@ -186,7 +186,7 @@ fn create_set_state_subcommand() -> clap::App<'static> {
             .help("Specifies whether a bridge should be used")
             .required(true)
             .index(1)
-            .possible_values(&["auto", "on", "off"]),
+            .possible_values(["auto", "on", "off"]),
     )
 }
 
@@ -229,7 +229,7 @@ impl Bridge {
                 }
             },
             BridgeSettings::Normal(constraints) => {
-                println!("Bridge constraints: {}", constraints)
+                println!("Bridge constraints: {constraints}")
             }
         };
         Ok(())
@@ -277,20 +277,25 @@ impl Bridge {
                 }
                 if let Some(new_providers) = providers {
                     constraints.providers =
-                        types::try_providers_constraint_from_proto(&new_providers).unwrap();
+                        types::relay_constraints::try_providers_constraint_from_proto(
+                            &new_providers,
+                        )
+                        .unwrap();
                 }
                 if let Some(new_ownership) = ownership {
-                    constraints.ownership = types::ownership_constraint_from_proto(new_ownership);
+                    constraints.ownership =
+                        types::relay_constraints::ownership_constraint_from_proto(new_ownership);
                 }
                 constraints
             }
             _ => {
                 let location = Constraint::<LocationConstraint>::from(location.unwrap_or_default());
-                let providers =
-                    types::try_providers_constraint_from_proto(&providers.unwrap_or_default())
-                        .unwrap();
+                let providers = types::relay_constraints::try_providers_constraint_from_proto(
+                    &providers.unwrap_or_default(),
+                )
+                .unwrap();
                 let ownership = ownership
-                    .map(types::ownership_constraint_from_proto)
+                    .map(types::relay_constraints::ownership_constraint_from_proto)
                     .unwrap_or_default();
 
                 BridgeConstraints {
@@ -378,6 +383,8 @@ impl Bridge {
                 peer: SocketAddr::new(remote_ip, remote_port),
                 password,
                 cipher,
+                #[cfg(target_os = "linux")]
+                fwmark: None,
             };
             let packed_proxy = openvpn::ProxySettings::Shadowsocks(proxy);
             if let Err(error) = openvpn::validate_proxy_settings(&packed_proxy) {

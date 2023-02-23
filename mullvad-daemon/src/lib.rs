@@ -22,13 +22,14 @@ mod migrations;
 pub mod rpc_uniqueness_check;
 pub mod runtime;
 pub mod settings;
+pub mod shutdown;
 mod target_state;
 mod tunnel;
 pub mod version;
 mod version_check;
 
 use crate::target_state::PersistentTargetState;
-use device::{PrivateAccountAndDevice, PrivateDeviceEvent};
+use device::{AccountEvent, PrivateAccountAndDevice, PrivateDeviceEvent};
 use futures::{
     channel::{mpsc, oneshot},
     future::{abortable, AbortHandle, Future, LocalBoxFuture},
@@ -40,6 +41,7 @@ use mullvad_relay_selector::{
 };
 use mullvad_types::{
     account::{AccountData, AccountToken, VoucherSubmission},
+    auth_failed::AuthFailed,
     device::{Device, DeviceEvent, DeviceEventCause, DeviceId, DeviceState, RemoveDeviceEvent},
     location::GeoIpLocation,
     relay_constraints::{BridgeSettings, BridgeState, ObfuscationSettings, RelaySettingsUpdate},
@@ -47,7 +49,7 @@ use mullvad_types::{
     settings::{DnsOptions, Settings},
     states::{TargetState, TunnelState},
     version::{AppVersion, AppVersionInfo},
-    wireguard::{PublicKey, RotationInterval},
+    wireguard::{PublicKey, QuantumResistantState, RotationInterval},
 };
 use settings::SettingsPersister;
 #[cfg(target_os = "android")]
@@ -125,6 +127,9 @@ pub enum Error {
 
     #[error(display = "Failed to update device")]
     UpdateDeviceError(#[error(source)] device::Error),
+
+    #[error(display = "Failed to submit voucher")]
+    VoucherSubmission(#[error(source)] device::Error),
 
     #[cfg(target_os = "linux")]
     #[error(display = "Unable to initialize split tunneling")]
@@ -221,7 +226,7 @@ pub enum DaemonCommand {
     /// Set if IPv6 should be enabled in the tunnel
     SetEnableIpv6(ResponseTx<(), settings::Error>, bool),
     /// Set whether to enable PQ PSK exchange in the tunnel
-    SetQuantumResistantTunnel(ResponseTx<(), settings::Error>, bool),
+    SetQuantumResistantTunnel(ResponseTx<(), settings::Error>, QuantumResistantState),
     /// Set DNS options or servers to use
     SetDnsOptions(ResponseTx<(), settings::Error>, DnsOptions),
     /// Toggle macOS network check leak
@@ -279,11 +284,11 @@ pub enum DaemonCommand {
     CheckVolumes(ResponseTx<(), Error>),
     /// Register settings for WireGuard obfuscator
     SetObfuscationSettings(ResponseTx<(), settings::Error>, ObfuscationSettings),
-    /// Makes the daemon exit the main loop and quit.
-    Shutdown,
     /// Saves the target tunnel state and enters a blocking state. The state is restored
     /// upon restart.
     PrepareRestart,
+    /// Causes a socket to bypass the tunnel. This has no effect when connected. It is only used
+    /// to bypass the tunnel in blocking states.
     #[cfg(target_os = "android")]
     BypassSocket(RawFd, oneshot::Sender<()>),
 }
@@ -295,11 +300,12 @@ pub(crate) enum InternalDaemonEvent {
     /// A command sent to the daemon.
     Command(DaemonCommand),
     /// Daemon shutdown triggered by a signal, ctrl-c or similar.
-    TriggerShutdown,
+    /// The boolean should indicate whether the shutdown was user-initiated.
+    TriggerShutdown(bool),
     /// The background job fetching new `AppVersionInfo`s got a new info object.
     NewAppVersionInfo(AppVersionInfo),
     /// Sent when a device is updated in any way (key rotation, login, logout, etc.).
-    DeviceEvent(PrivateDeviceEvent),
+    DeviceEvent(AccountEvent),
     /// Handles updates from versions without devices.
     DeviceMigrationEvent(Result<PrivateAccountAndDevice, device::Error>),
     /// The split tunnel paths or state were updated.
@@ -331,8 +337,8 @@ impl From<AppVersionInfo> for InternalDaemonEvent {
     }
 }
 
-impl From<PrivateDeviceEvent> for InternalDaemonEvent {
-    fn from(event: PrivateDeviceEvent) -> Self {
+impl From<AccountEvent> for InternalDaemonEvent {
+    fn from(event: AccountEvent) -> Self {
         InternalDaemonEvent::DeviceEvent(event)
     }
 }
@@ -422,6 +428,16 @@ impl DaemonCommandSender {
     pub fn send(&self, command: DaemonCommand) -> Result<(), Error> {
         self.0
             .unbounded_send(InternalDaemonEvent::Command(command))
+            .map_err(|_| Error::DaemonUnavailable)
+    }
+
+    /// Shuts down the daemon. This triggers the shutdown as though the user would shut it down
+    /// because blocking traffic on Android relies on the daemon process being alive and keeping a
+    /// tunnel device open.
+    #[cfg(target_os = "android")]
+    pub fn shutdown(&self) -> Result<(), Error> {
+        self.0
+            .unbounded_send(InternalDaemonEvent::TriggerShutdown(true))
             .map_err(|_| Error::DaemonUnavailable)
     }
 }
@@ -586,8 +602,9 @@ where
                 None
             });
         let settings = SettingsPersister::load(&settings_dir).await;
+        let app_version_info = version_check::load_cache(&cache_dir).await;
 
-        let initial_selector_config = new_selector_config(&settings);
+        let initial_selector_config = new_selector_config(&settings, &app_version_info);
         let relay_selector = RelaySelector::new(initial_selector_config, &resource_dir, &cache_dir);
 
         let proxy_provider =
@@ -676,6 +693,11 @@ where
             exclusion_gid,
             #[cfg(target_os = "android")]
             android_context,
+            #[cfg(target_os = "linux")]
+            tunnel_state_machine::LinuxNetworkingIdentifiers {
+                fwmark: mullvad_types::TUNNEL_FWMARK,
+                table_id: mullvad_types::TUNNEL_TABLE_ID,
+            },
         )
         .await
         .map_err(Error::TunnelError)?;
@@ -697,7 +719,6 @@ where
             on_relay_list_update,
         );
 
-        let app_version_info = version_check::load_cache(&cache_dir).await;
         let (version_updater, version_updater_handle) = version_check::VersionUpdater::new(
             api_handle.clone(),
             api_availability.clone(),
@@ -820,9 +841,9 @@ where
                 self.handle_tunnel_state_transition(transition).await
             }
             Command(command) => self.handle_command(command).await,
-            TriggerShutdown => self.trigger_shutdown_event(),
+            TriggerShutdown(user_init_shutdown) => self.trigger_shutdown_event(user_init_shutdown),
             NewAppVersionInfo(app_version_info) => {
-                self.handle_new_app_version_info(app_version_info)
+                self.handle_new_app_version_info(app_version_info);
             }
             DeviceEvent(event) => self.handle_device_event(event).await,
             DeviceMigrationEvent(event) => self.handle_device_migration_event(event).await,
@@ -835,8 +856,7 @@ where
         &mut self,
         tunnel_state_transition: TunnelStateTransition,
     ) {
-        self.reset_rpc_sockets_on_tunnel_state_transition(&tunnel_state_transition)
-            .await;
+        self.reset_rpc_sockets_on_tunnel_state_transition(&tunnel_state_transition);
         self.device_checker
             .handle_state_transition(&tunnel_state_transition);
 
@@ -890,6 +910,8 @@ where
                 }
 
                 if let ErrorStateCause::AuthFailed(_) = error_state.cause() {
+                    // If time is added outside of the app, no notifications
+                    // are received. So we must continually try to reconnect.
                     self.schedule_reconnect(Duration::from_secs(60))
                 }
             }
@@ -900,12 +922,12 @@ where
         self.event_listener.notify_new_state(tunnel_state);
     }
 
-    async fn reset_rpc_sockets_on_tunnel_state_transition(
+    fn reset_rpc_sockets_on_tunnel_state_transition(
         &mut self,
         tunnel_state_transition: &TunnelStateTransition,
     ) {
         match (&self.tunnel_state, &tunnel_state_transition) {
-            // only reset the API sockets if when connected or leaving the connected state
+            // Only reset the API sockets when entering or leaving the connected state
             (&TunnelState::Connected { .. }, _) | (_, &TunnelStateTransition::Connected(_)) => {
                 self.api_handle.service().reset();
             }
@@ -982,8 +1004,9 @@ where
             }
             SetBridgeState(tx, bridge_state) => self.on_set_bridge_state(tx, bridge_state).await,
             SetEnableIpv6(tx, enable_ipv6) => self.on_set_enable_ipv6(tx, enable_ipv6).await,
-            SetQuantumResistantTunnel(tx, enable_pq) => {
-                self.on_set_quantum_resistant_tunnel(tx, enable_pq).await
+            SetQuantumResistantTunnel(tx, quantum_resistant_state) => {
+                self.on_set_quantum_resistant_tunnel(tx, quantum_resistant_state)
+                    .await
             }
             SetDnsOptions(tx, dns_servers) => self.on_set_dns_options(tx, dns_servers).await,
             SetWireguardMtu(tx, mtu) => self.on_set_wireguard_mtu(tx, mtu).await,
@@ -994,7 +1017,7 @@ where
             RotateWireguardKey(tx) => self.on_rotate_wireguard_key(tx).await,
             GetWireguardKey(tx) => self.on_get_wireguard_key(tx).await,
             GetVersionInfo(tx) => self.on_get_version_info(tx).await,
-            IsPerformingPostUpgrade(tx) => self.on_is_performing_post_upgrade(tx).await,
+            IsPerformingPostUpgrade(tx) => self.on_is_performing_post_upgrade(tx),
             GetCurrentVersion(tx) => self.on_get_current_version(tx),
             #[cfg(not(target_os = "android"))]
             FactoryReset(tx) => self.on_factory_reset(tx).await,
@@ -1023,7 +1046,6 @@ where
             SetObfuscationSettings(tx, settings) => {
                 self.on_set_obfuscation_settings(tx, settings).await
             }
-            Shutdown => self.trigger_shutdown_event(),
             PrepareRestart => self.on_prepare_restart(),
             #[cfg(target_os = "android")]
             BypassSocket(fd, tx) => self.on_bypass_socket(fd, tx),
@@ -1032,12 +1054,14 @@ where
 
     fn handle_new_app_version_info(&mut self, app_version_info: AppVersionInfo) {
         self.app_version_info = Some(app_version_info.clone());
+        self.relay_selector
+            .set_config(new_selector_config(&self.settings, &self.app_version_info));
         self.event_listener.notify_app_version(app_version_info);
     }
 
-    async fn handle_device_event(&mut self, event: PrivateDeviceEvent) {
+    async fn handle_device_event(&mut self, event: AccountEvent) {
         match &event {
-            PrivateDeviceEvent::Login(device) => {
+            AccountEvent::Device(PrivateDeviceEvent::Login(device)) => {
                 if let Err(error) = self.account_history.set(device.account_token.clone()).await {
                     log::error!(
                         "{}",
@@ -1049,26 +1073,43 @@ where
                     self.reconnect_tunnel();
                 }
             }
-            PrivateDeviceEvent::Logout => {
+            AccountEvent::Device(PrivateDeviceEvent::Logout) => {
                 log::info!("Disconnecting because account token was cleared");
                 self.set_target_state(TargetState::Unsecured).await;
             }
-            PrivateDeviceEvent::Revoked => {
+            AccountEvent::Device(PrivateDeviceEvent::Revoked) => {
                 // If we're currently in a secured state, reconnect to make sure we immediately
                 // enter the error state.
                 if *self.target_state == TargetState::Secured {
                     self.connect_tunnel();
                 }
             }
-            PrivateDeviceEvent::RotatedKey(_) => {
+            AccountEvent::Device(PrivateDeviceEvent::RotatedKey(_)) => {
                 if self.get_target_tunnel_type() == Some(TunnelType::Wireguard) {
                     self.schedule_reconnect(WG_RECONNECT_DELAY);
                 }
             }
+            AccountEvent::Expiry(expiry) if *self.target_state == TargetState::Secured => {
+                if expiry >= &chrono::Utc::now() {
+                    if let TunnelState::Error(ref state) = self.tunnel_state {
+                        if matches!(state.cause(), ErrorStateCause::AuthFailed(_)) {
+                            log::debug!("Reconnecting since the account has time on it");
+                            self.connect_tunnel();
+                        }
+                    }
+                } else if self.get_target_tunnel_type() == Some(TunnelType::Wireguard) {
+                    log::debug!("Entering blocking state since the account is out of time");
+                    self.send_tunnel_command(TunnelCommand::Block(ErrorStateCause::AuthFailed(
+                        Some(AuthFailed::ExpiredAccount.as_str().to_string()),
+                    )))
+                }
+            }
             _ => (),
         }
-        self.event_listener
-            .notify_device_event(DeviceEvent::from(event));
+        if let AccountEvent::Device(event) = event {
+            self.event_listener
+                .notify_device_event(DeviceEvent::from(event));
+        }
     }
 
     async fn handle_device_migration_event(
@@ -1163,7 +1204,7 @@ where
         Self::oneshot_send(tx, self.tunnel_state.clone(), "current state");
     }
 
-    async fn on_is_performing_post_upgrade(&self, tx: oneshot::Sender<bool>) {
+    fn on_is_performing_post_upgrade(&self, tx: oneshot::Sender<bool>) {
         let performing_post_upgrade = !self.migration_complete.is_complete();
         Self::oneshot_send(tx, performing_post_upgrade, "performing post upgrade");
     }
@@ -1211,8 +1252,9 @@ where
 
     async fn get_geo_location(&mut self) -> impl Future<Output = Result<GeoIpLocation, ()>> {
         let rest_service = self.api_runtime.rest_handle().await;
-        async {
-            geoip::send_location_request(rest_service)
+        let use_ipv6 = self.settings.tunnel_options.generic.enable_ipv6;
+        async move {
+            geoip::send_location_request(rest_service, use_ipv6)
                 .await
                 .map_err(|e| {
                     log::warn!("Unable to fetch GeoIP location: {}", e.display_chain());
@@ -1293,21 +1335,17 @@ where
         tx: ResponseTx<VoucherSubmission, Error>,
         voucher: String,
     ) {
-        if let Ok(Some(device)) = self.account_manager.data().await.map(|s| s.into_device()) {
-            let mut account = self.account_manager.account_service.clone();
-            tokio::spawn(async move {
-                Self::oneshot_send(
-                    tx,
-                    account
-                        .submit_voucher(device.account_token, voucher)
-                        .await
-                        .map_err(Error::RestError),
-                    "submit_voucher response",
-                );
-            });
-        } else {
-            Self::oneshot_send(tx, Err(Error::NoAccountToken), "submit_voucher response");
-        }
+        let manager = self.account_manager.clone();
+        tokio::spawn(async move {
+            Self::oneshot_send(
+                tx,
+                manager
+                    .submit_voucher(voucher)
+                    .await
+                    .map_err(Error::VoucherSubmission),
+                "submit_voucher response",
+            );
+        });
     }
 
     fn on_get_relay_locations(&mut self, tx: oneshot::Sender<RelayList>) {
@@ -1466,7 +1504,7 @@ where
     fn on_get_current_version(&mut self, tx: oneshot::Sender<AppVersion>) {
         Self::oneshot_send(
             tx,
-            version::PRODUCT_VERSION.to_owned(),
+            mullvad_version::VERSION.to_owned(),
             "get_current_version response",
         );
     }
@@ -1496,7 +1534,7 @@ where
         }
 
         // Shut the daemon down.
-        self.trigger_shutdown_event();
+        self.trigger_shutdown_event(false);
 
         self.shutdown_tasks.push(Box::pin(async move {
             if let Err(e) = cleanup::clear_directories().await {
@@ -1742,7 +1780,7 @@ where
                     self.event_listener
                         .notify_settings(self.settings.to_settings());
                     self.relay_selector
-                        .set_config(new_selector_config(&self.settings));
+                        .set_config(new_selector_config(&self.settings, &self.app_version_info));
                     log::info!("Initiating tunnel restart because the relay settings changed");
                     self.reconnect_tunnel();
                 }
@@ -1884,8 +1922,8 @@ where
                     self.event_listener
                         .notify_settings(self.settings.to_settings());
                     self.relay_selector
-                        .set_config(new_selector_config(&self.settings));
-                    if let Err(error) = self.api_handle.service().next_api_endpoint().await {
+                        .set_config(new_selector_config(&self.settings, &self.app_version_info));
+                    if let Err(error) = self.api_handle.service().next_api_endpoint() {
                         log::error!("Failed to rotate API endpoint: {}", error);
                     }
                     self.reconnect_tunnel();
@@ -1914,7 +1952,7 @@ where
                     self.event_listener
                         .notify_settings(self.settings.to_settings());
                     self.relay_selector
-                        .set_config(new_selector_config(&self.settings));
+                        .set_config(new_selector_config(&self.settings, &self.app_version_info));
                     self.reconnect_tunnel();
                 }
                 Self::oneshot_send(tx, Ok(()), "set_obfuscation_settings");
@@ -1940,7 +1978,7 @@ where
                     self.event_listener
                         .notify_settings(self.settings.to_settings());
                     self.relay_selector
-                        .set_config(new_selector_config(&self.settings));
+                        .set_config(new_selector_config(&self.settings, &self.app_version_info));
                     log::info!("Initiating tunnel restart because bridge state changed");
                     self.reconnect_tunnel();
                 }
@@ -1982,11 +2020,11 @@ where
     async fn on_set_quantum_resistant_tunnel(
         &mut self,
         tx: ResponseTx<(), settings::Error>,
-        use_pq_safe_psk: bool,
+        quantum_resistant: QuantumResistantState,
     ) {
         let save_result = self
             .settings
-            .set_quantum_resistant_tunnel(use_pq_safe_psk)
+            .set_quantum_resistant_tunnel(quantum_resistant)
             .await;
         match save_result {
             Ok(settings_changed) => {
@@ -2136,11 +2174,13 @@ where
         }
     }
 
-    fn trigger_shutdown_event(&mut self) {
-        // If auto-connect is enabled, block all traffic before shutting down to ensure
-        // that no traffic can leak during boot.
-        #[cfg(windows)]
-        if self.settings.auto_connect {
+    fn trigger_shutdown_event(&mut self, user_init_shutdown: bool) {
+        // Block all traffic before shutting down to ensure that no traffic can leak on boot or
+        // shutdown.
+        if !user_init_shutdown
+            && (*self.target_state == TargetState::Secured || self.settings.auto_connect)
+        {
+            log::debug!("Blocking firewall during shutdown since system is going down");
             self.send_tunnel_command(TunnelCommand::BlockWhenDisconnected(true));
         }
 
@@ -2162,7 +2202,10 @@ where
     fn on_bypass_socket(&mut self, fd: RawFd, tx: oneshot::Sender<()>) {
         match self.tunnel_state {
             // When connected, the API connection shouldn't be bypassed.
-            TunnelState::Connected { .. } => (),
+            TunnelState::Connected { .. } => {
+                log::trace!("Not bypassing connection because the tunnel is up");
+                let _ = tx.send(());
+            }
             _ => {
                 self.send_tunnel_command(TunnelCommand::BypassSocket(fd, tx));
             }
@@ -2243,21 +2286,47 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct DaemonShutdownHandle {
     tx: DaemonEventSender,
 }
 
 impl DaemonShutdownHandle {
-    pub fn shutdown(&self) {
-        let _ = self.tx.send(InternalDaemonEvent::TriggerShutdown);
+    pub fn shutdown(&self, user_init_shutdown: bool) {
+        let _ = self
+            .tx
+            .send(InternalDaemonEvent::TriggerShutdown(user_init_shutdown));
     }
 }
 
-fn new_selector_config(settings: &Settings) -> SelectorConfig {
+fn new_selector_config(
+    settings: &Settings,
+    app_version_info: &Option<AppVersionInfo>,
+) -> SelectorConfig {
+    // In case of the app not having a version we safety default to OpenVPN to guard against the
+    // case where some error causes users to not recieve a version and in that case all going to
+    // wireguard. Magic number 0.0 implies that 0% of users should use Wireguard.
+    // This will be removed in the future when we the migration is done.
+    let wg_migration_threshold = app_version_info
+        .as_ref()
+        .map(|f| f.wg_migration_threshold)
+        .unwrap_or(0.0);
+
+    let default_tunnel_type = if cfg!(target_os = "windows") {
+        if wg_migration_threshold >= settings.wg_migration_rand_num {
+            TunnelType::Wireguard
+        } else {
+            TunnelType::OpenVpn
+        }
+    } else {
+        TunnelType::Wireguard
+    };
+
     SelectorConfig {
         relay_settings: settings.get_relay_settings(),
         bridge_state: settings.get_bridge_state(),
         bridge_settings: settings.bridge_settings.clone(),
         obfuscation_settings: settings.obfuscation_settings.clone(),
+        default_tunnel_type,
     }
 }

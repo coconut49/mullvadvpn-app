@@ -1,6 +1,6 @@
 [package]
 name = "talpid-openvpn-plugin"
-version = "2022.3.0-beta3"
+version = "0.0.0"
 authors = ["Mullvad VPN"]
 description = "OpenVPN shared library plugin for relaying OpenVPN events to talpid_core"
 license = "GPL-3.0"
@@ -13,28 +13,34 @@ crate-type = ["cdylib"]
 [dependencies]
 err-derive = "0.3.1"
 log = "0.4"
-env_logger = "0.8.2"
+env_logger = "0.10.0"
 parity-tokio-ipc = "0.9"
 tokio = { version = "1.8", features =  ["rt"] }
 
-openvpn-plugin = { version = "0.4", features = ["serde", "log", "auth-failed-event"] }
+openvpn-plugin = { version = "0.4.2", features = ["serde", "log", "auth-failed-event"] }
 talpid-types = { path = "../talpid-types" }
 
-tonic = "0.5"
+tonic = "0.8"
 tower = "0.4"
-prost = "0.8"
+prost = "0.11"
 
 [build-dependencies]
-tonic-build = { version = "0.5", default-features = false, features = ["transport", "prost"] }
+tonic-build = { version = "0.8", default-features = false, features = ["transport", "prost"] }
 
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
-winapi = "0.3"
+mullvad-version = { path = "../mullvad-version" }
+
+[target.'cfg(windows)'.build-dependencies.windows-sys]
+version = "0.42.0"
+features = [
+    "Win32_System_SystemServices",
+]
 
 [package.metadata.winres]
 ProductName = "Mullvad VPN"
 CompanyName = "Mullvad VPN AB"
-LegalCopyright = "(c) 2022 Mullvad VPN AB"
+LegalCopyright = "(c) 2023 Mullvad VPN AB"
 InternalName = "talpid-openvpn-plugin"
 OriginalFilename = "talpid_openvpn_plugin.dll"

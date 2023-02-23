@@ -6,11 +6,13 @@
 //  Copyright © 2019 Mullvad VPN AB. All rights reserved.
 //
 
-import XCTest
+import MullvadREST
+import MullvadTypes
 import Network
+import RelaySelector
+import XCTest
 
 class RelaySelectorTests: XCTestCase {
-
     func testCountryConstraint() throws {
         let constraints = RelayConstraints(location: .only(.country("es")))
 
@@ -33,7 +35,6 @@ class RelaySelectorTests: XCTestCase {
 
         XCTAssertEqual(result.relay.hostname, "se6-wireguard")
     }
-
 }
 
 private let sampleRelays = REST.ServerRelaysResponse(
@@ -55,7 +56,7 @@ private let sampleRelays = REST.ServerRelaysResponse(
             city: "Stockholm",
             latitude: 59.3289,
             longitude: 18.0649
-        )
+        ),
     ],
     wireguard: REST.ServerWireguardTunnels(
         ipv4Gateway: .loopback,
@@ -109,6 +110,7 @@ private let sampleRelays = REST.ServerRelaysResponse(
                 ipv6AddrIn: .loopback,
                 publicKey: Data(),
                 includeInCountry: true
-            )
-    ])
+            ),
+        ]
+    )
 )

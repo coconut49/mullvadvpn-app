@@ -6,46 +6,54 @@
 //  Copyright © 2019 Mullvad VPN AB. All rights reserved.
 //
 
+import MullvadLogging
+import MullvadTypes
+import Operations
 import UIKit
-import Logging
 
-enum AuthenticationMethod {
-    case existingAccount, newAccount
+enum LoginAction {
+    case useExistingAccount(String)
+    case createAccount
+
+    var setAccountAction: SetAccountAction {
+        switch self {
+        case let .useExistingAccount(accountNumber):
+            return .existing(accountNumber)
+        case .createAccount:
+            return .new
+        }
+    }
 }
 
 enum LoginState {
     case `default`
-    case authenticating(AuthenticationMethod)
-    case failure(TunnelManager.Error)
-    case success(AuthenticationMethod)
+    case authenticating(LoginAction)
+    case failure(Error)
+    case success(LoginAction)
 }
 
 protocol LoginViewControllerDelegate: AnyObject {
     func loginViewController(
         _ controller: LoginViewController,
-        loginWithAccountToken accountToken: String,
-        completion: @escaping (OperationCompletion<StoredAccountData?, TunnelManager.Error>) -> Void
+        shouldHandleLoginAction action: LoginAction,
+        completion: @escaping (OperationCompletion<StoredAccountData?, Error>) -> Void
     )
 
-    func loginViewControllerLoginWithNewAccount(
-        _ controller: LoginViewController,
-        completion: @escaping (OperationCompletion<StoredAccountData?, TunnelManager.Error>) -> Void
-    )
-
-    func loginViewControllerDidLogin(_ controller: LoginViewController)
+    func loginViewControllerDidFinishLogin(_ controller: LoginViewController)
 }
 
 class LoginViewController: UIViewController, RootContainment {
-
     private lazy var contentView: LoginContentView = {
         let view = LoginContentView(frame: self.view.bounds)
         view.translatesAutoresizingMaskIntoConstraints = false
         return view
     }()
 
-    private lazy var accountInputAccessoryCancelButton: UIBarButtonItem = {
-        return UIBarButtonItem(barButtonSystemItem: .cancel, target: self, action: #selector(cancelLogin))
-    }()
+    private lazy var accountInputAccessoryCancelButton = UIBarButtonItem(
+        barButtonSystemItem: .cancel,
+        target: self,
+        action: #selector(cancelLogin)
+    )
 
     private lazy var accountInputAccessoryLoginButton: UIBarButtonItem = {
         let barButtonItem = UIBarButtonItem(
@@ -69,7 +77,7 @@ class LoginViewController: UIViewController, RootContainment {
         toolbar.items = [
             self.accountInputAccessoryCancelButton,
             UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
-            self.accountInputAccessoryLoginButton
+            self.accountInputAccessoryLoginButton,
         ]
         toolbar.sizeToFit()
         return toolbar
@@ -124,7 +132,8 @@ class LoginViewController: UIViewController, RootContainment {
         // There is no need to set the input accessory toolbar on iPad since it has a dedicated
         // button to dismiss the keyboard.
         if case .phone = UIDevice.current.userInterfaceIdiom {
-            contentView.accountInputGroup.textField.inputAccessoryView = self.accountInputAccessoryToolbar
+            contentView.accountInputGroup.textField.inputAccessoryView = self
+                .accountInputAccessoryToolbar
         } else {
             contentView.accountInputGroup.textField.inputAccessoryView = nil
         }
@@ -135,12 +144,18 @@ class LoginViewController: UIViewController, RootContainment {
 
         let notificationCenter = NotificationCenter.default
 
-        contentView.createAccountButton.addTarget(self, action: #selector(createNewAccount), for: .touchUpInside)
+        contentView.createAccountButton.addTarget(
+            self,
+            action: #selector(createNewAccount),
+            for: .touchUpInside
+        )
 
-        notificationCenter.addObserver(self,
-                                       selector: #selector(textDidChange(_:)),
-                                       name: UITextField.textDidChangeNotification,
-                                       object: contentView.accountInputGroup.textField)
+        notificationCenter.addObserver(
+            self,
+            selector: #selector(textDidChange(_:)),
+            name: UITextField.textDidChangeNotification,
+            object: contentView.accountInputGroup.textField
+        )
     }
 
     override var disablesAutomaticKeyboardDismissal: Bool {
@@ -155,6 +170,26 @@ class LoginViewController: UIViewController, RootContainment {
     }
 
     // MARK: - Public
+
+    func start(action: LoginAction) {
+        beginLogin(action)
+
+        delegate?
+            .loginViewController(self, shouldHandleLoginAction: action) { [weak self] completion in
+                switch completion {
+                case let .success(accountData):
+                    if case .createAccount = action {
+                        self?.contentView.accountInputGroup.setAccount(accountData?.number ?? "")
+                    }
+
+                    self?.endLogin(.success(action))
+                case let .failure(error):
+                    self?.endLogin(.failure(error))
+                case .cancelled:
+                    self?.endLogin(.default)
+                }
+            }
+    }
 
     func reset() {
         contentView.accountInputGroup.clearAccount()
@@ -180,43 +215,18 @@ class LoginViewController: UIViewController, RootContainment {
 
     // MARK: - Actions
 
-    @objc func cancelLogin() {
+    @objc private func cancelLogin() {
         view.endEditing(true)
     }
 
-    @objc func doLogin() {
-        let accountToken = contentView.accountInputGroup.parsedToken
+    @objc private func doLogin() {
+        let accountNumber = contentView.accountInputGroup.parsedToken
 
-        beginLogin(method: .existingAccount)
-        self.delegate?.loginViewController(self, loginWithAccountToken: accountToken, completion: { [weak self] completion in
-            switch completion {
-            case .success:
-                self?.endLogin(.success(.existingAccount))
-            case .failure(let error):
-                self?.endLogin(.failure(error))
-            case .cancelled:
-                self?.endLogin(.default)
-            }
-        })
+        start(action: .useExistingAccount(accountNumber))
     }
 
-    @objc func createNewAccount() {
-        beginLogin(method: .newAccount)
-
-        contentView.accountInputGroup.clearAccount()
-        updateKeyboardToolbar()
-
-        self.delegate?.loginViewControllerLoginWithNewAccount(self, completion: { [weak self] completion in
-            switch completion {
-            case .success(let accountData):
-                self?.contentView.accountInputGroup.setAccount(accountData?.number ?? "")
-                self?.endLogin(.success(.newAccount))
-            case .failure(let error):
-                self?.endLogin(.failure(error))
-            case .cancelled:
-                self?.endLogin(.default)
-            }
-        })
+    @objc private func createNewAccount() {
+        start(action: .createAccount)
     }
 
     // MARK: - Private
@@ -227,21 +237,15 @@ class LoginViewController: UIViewController, RootContainment {
 
             contentView.accountInputGroup.setLastUsedAccount(accountNumber, animated: false)
         } catch {
-            logger.error(chainedError: AnyChainedError(error),
-                         message: "Failed to update last used account.")
+            logger.error(
+                error: error,
+                message: "Failed to update last used account."
+            )
         }
     }
 
     private func loginStateDidChange() {
         contentView.accountInputGroup.setLoginState(loginState, animated: true)
-
-        switch loginState {
-        case .authenticating:
-            contentView.activityIndicator.startAnimating()
-
-        case .success, .default, .failure:
-            contentView.activityIndicator.stopAnimating()
-        }
 
         updateDisplayedMessage()
         updateStatusIcon()
@@ -251,18 +255,18 @@ class LoginViewController: UIViewController, RootContainment {
     private func updateStatusIcon() {
         switch loginState {
         case .failure:
-            contentView.setStatusImage(style: .failure, visible: true, animated: true)
-
+            contentView.statusActivityView.state = .failure
         case .success:
-            contentView.setStatusImage(style: .success, visible: true, animated: true)
-
-        case .default, .authenticating:
-            contentView.setStatusImage(style: nil, visible: false, animated: true)
+            contentView.statusActivityView.state = .success
+        case .authenticating:
+            contentView.statusActivityView.state = .activity
+        case .default:
+            contentView.statusActivityView.state = .hidden
         }
     }
 
-    private func beginLogin(method: AuthenticationMethod) {
-        loginState = .authenticating(method)
+    private func beginLogin(_ action: LoginAction) {
+        loginState = .authenticating(action)
 
         view.endEditing(true)
     }
@@ -272,12 +276,12 @@ class LoginViewController: UIViewController, RootContainment {
 
         loginState = nextLoginState
 
-        if case .authenticating(.existingAccount) = oldLoginState, case .failure = loginState {
+        if case .authenticating(.useExistingAccount) = oldLoginState, case .failure = loginState {
             contentView.accountInputGroup.textField.becomeFirstResponder()
         } else if case .success = loginState {
             // Navigate to the main view after 1s delay
             DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(1)) {
-                self.delegate?.loginViewControllerDidLogin(self)
+                self.delegate?.loginViewControllerDidFinishLogin(self)
             }
         }
     }
@@ -299,7 +303,7 @@ class LoginViewController: UIViewController, RootContainment {
             // Disable "Create account" button on iPad as user types in the account token,
             // however leave it enabled on iPhone to avoid confusion to why it's being disabled
             // since it's likely overlayed by keyboard.
-            if case .pad = self.traitCollection.userInterfaceIdiom {
+            if case .pad = traitCollection.userInterfaceIdiom {
                 isEnabled = contentView.accountInputGroup.textField.text?.isEmpty ?? true
             } else {
                 isEnabled = true
@@ -370,16 +374,16 @@ private extension LoginState {
                 comment: ""
             )
 
-        case .authenticating(let method):
+        case let .authenticating(method):
             switch method {
-            case .existingAccount:
+            case .useExistingAccount:
                 return NSLocalizedString(
                     "SUBHEAD_TITLE_AUTHENTICATING",
                     tableName: "Login",
                     value: "Checking account number",
                     comment: ""
                 )
-            case .newAccount:
+            case .createAccount:
                 return NSLocalizedString(
                     "SUBHEAD_TITLE_CREATING_ACCOUNT",
                     tableName: "Login",
@@ -388,19 +392,19 @@ private extension LoginState {
                 )
             }
 
-        case .failure(let error):
-            return error.errorChainDescription ?? ""
+        case let .failure(error):
+            return (error as? DisplayError)?.displayErrorDescription ?? error.localizedDescription
 
-        case .success(let method):
+        case let .success(method):
             switch method {
-            case .existingAccount:
+            case .useExistingAccount:
                 return NSLocalizedString(
                     "SUBHEAD_TITLE_SUCCESS",
                     tableName: "Login",
                     value: "Correct account number",
                     comment: ""
                 )
-            case .newAccount:
+            case .createAccount:
                 return NSLocalizedString(
                     "SUBHEAD_TITLE_CREATED_ACCOUNT",
                     tableName: "Login",
@@ -420,8 +424,10 @@ extension LoginViewController: AccountInputGroupViewDelegate {
             try SettingsManager.setLastUsedAccount(nil)
             return true
         } catch {
-            self.logger.error(chainedError: AnyChainedError(error),
-                              message: "Failed to remove last used account.")
+            logger.error(
+                error: error,
+                message: "Failed to remove last used account."
+            )
             return false
         }
     }

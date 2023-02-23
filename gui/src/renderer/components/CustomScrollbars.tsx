@@ -35,6 +35,7 @@ const StyledTrack = styled.div({}, (props: { canScroll: boolean; show: boolean }
   bottom: 0,
   width: '16px',
   backgroundColor: props.show ? 'rgba(0, 0, 0, 0.2)' : 'rgba(0, 0, 0, 0)',
+  borderRadius: '8px',
   transition: 'width 0.1s ease-in-out, background-color 0.25s ease-in-out',
   zIndex: 99,
   pointerEvents: props.canScroll ? 'auto' : 'none',
@@ -136,17 +137,12 @@ class CustomScrollbars extends React.Component<IProps, IState> {
 
   public scrollToTop(smooth = false) {
     const scrollable = this.scrollableRef.current;
-    if (scrollable) {
-      scrollable.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'auto' });
-    }
+    scrollable?.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'auto' });
   }
 
-  public scrollTo(x: number, y: number) {
+  public scrollTo(x: number, y: number, smooth = false) {
     const scrollable = this.scrollableRef.current;
-    if (scrollable) {
-      scrollable.scrollLeft = x;
-      scrollable.scrollTop = y;
-    }
+    scrollable?.scrollTo({ top: y, left: x, behavior: smooth ? 'smooth' : 'auto' });
   }
 
   public scrollToElement(child: HTMLElement, scrollPosition: ScrollPosition) {

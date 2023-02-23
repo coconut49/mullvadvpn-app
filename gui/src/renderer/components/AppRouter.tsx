@@ -1,15 +1,13 @@
-import { Action } from 'history';
-import * as React from 'react';
+import { createRef, useCallback, useEffect, useState } from 'react';
 import { Route, Switch } from 'react-router';
 
-import AccountPage from '../containers/AccountPage';
+import SelectLocation from '../components/select-location/SelectLocationContainer';
 import LoginPage from '../containers/LoginPage';
-import ProblemReportPage from '../containers/ProblemReportPage';
-import SelectLanguagePage from '../containers/SelectLanguagePage';
-import SelectLocationPage from '../containers/SelectLocationPage';
-import withAppContext, { IAppContext } from '../context';
-import { IHistoryProps, ITransitionSpecification, transitions, withHistory } from '../lib/history';
+import { useAppContext } from '../context';
+import { ITransitionSpecification, transitions, useHistory } from '../lib/history';
 import { RoutePath } from '../lib/routes';
+import Account from './Account';
+import Debug from './Debug';
 import { DeviceRevokedView } from './DeviceRevokedView';
 import {
   SetupFinished,
@@ -19,98 +17,75 @@ import {
 } from './ExpiredAccountAddTime';
 import Filter from './Filter';
 import Focus, { IFocusHandle } from './Focus';
-import InterfaceSettings from './InterfaceSettings';
 import Launch from './Launch';
 import MainView from './MainView';
 import OpenVpnSettings from './OpenVpnSettings';
+import ProblemReport from './ProblemReport';
+import SelectLanguage from './SelectLanguage';
 import Settings from './Settings';
 import SplitTunnelingSettings from './SplitTunnelingSettings';
 import Support from './Support';
 import TooManyDevices from './TooManyDevices';
 import TransitionContainer, { TransitionView } from './TransitionContainer';
+import UserInterfaceSettings from './UserInterfaceSettings';
 import VpnSettings from './VpnSettings';
 import WireguardSettings from './WireguardSettings';
 
-interface IAppRoutesState {
-  currentLocation: IHistoryProps['history']['location'];
-  transition: ITransitionSpecification;
-  action?: Action;
-}
+export default function AppRouter() {
+  const history = useHistory();
+  const [currentLocation, setCurrentLocation] = useState(history.location);
+  const [transition, setTransition] = useState<ITransitionSpecification>(transitions.none);
+  const { setNavigationHistory } = useAppContext();
+  const focusRef = createRef<IFocusHandle>();
 
-class AppRouter extends React.Component<IHistoryProps & IAppContext, IAppRoutesState> {
-  private unobserveHistory?: () => void;
+  let unobserveHistory: () => void;
 
-  private focusRef = React.createRef<IFocusHandle>();
-
-  constructor(props: IHistoryProps & IAppContext) {
-    super(props);
-
-    this.state = {
-      currentLocation: props.history.location,
-      transition: transitions.none,
-    };
-  }
-
-  public componentDidMount() {
+  useEffect(() => {
     // React throttles updates, so it's impossible to capture the intermediate navigation without
     // listening to the history directly.
-    this.unobserveHistory = this.props.history.listen((location, action, transition) => {
-      this.props.app.setNavigationHistory(this.props.history.asObject);
-      this.setState({
-        currentLocation: location,
-        transition,
-        action,
-      });
+    unobserveHistory = history.listen((location, _, transition) => {
+      setNavigationHistory(history.asObject);
+      setCurrentLocation(location);
+      setTransition(transition);
     });
-  }
 
-  public componentWillUnmount() {
-    if (this.unobserveHistory) {
-      this.unobserveHistory();
-    }
-  }
+    return () => unobserveHistory?.();
+  }, []);
 
-  public render() {
-    const location = this.state.currentLocation;
+  const onNavigation = useCallback(() => {
+    focusRef.current?.resetFocus();
+  }, []);
 
-    return (
-      <Focus ref={this.focusRef}>
-        <TransitionContainer onTransitionEnd={this.onNavigation} {...this.state.transition}>
-          <TransitionView viewId={location.key || ''}>
-            <Switch key={location.key} location={location}>
-              <Route exact path={RoutePath.launch} component={Launch} />
-              <Route exact path={RoutePath.login} component={LoginPage} />
-              <Route exact path={RoutePath.tooManyDevices} component={TooManyDevices} />
-              <Route exact path={RoutePath.deviceRevoked} component={DeviceRevokedView} />
-              <Route exact path={RoutePath.main} component={MainView} />
-              <Route exact path={RoutePath.redeemVoucher} component={VoucherInput} />
-              <Route exact path={RoutePath.voucherSuccess} component={VoucherVerificationSuccess} />
-              <Route exact path={RoutePath.timeAdded} component={TimeAdded} />
-              <Route exact path={RoutePath.setupFinished} component={SetupFinished} />
-              <Route exact path={RoutePath.settings} component={Settings} />
-              <Route exact path={RoutePath.selectLanguage} component={SelectLanguagePage} />
-              <Route exact path={RoutePath.accountSettings} component={AccountPage} />
-              <Route exact path={RoutePath.interfaceSettings} component={InterfaceSettings} />
-              <Route exact path={RoutePath.vpnSettings} component={VpnSettings} />
-              <Route exact path={RoutePath.wireguardSettings} component={WireguardSettings} />
-              <Route exact path={RoutePath.openVpnSettings} component={OpenVpnSettings} />
-              <Route exact path={RoutePath.splitTunneling} component={SplitTunnelingSettings} />
-              <Route exact path={RoutePath.support} component={Support} />
-              <Route exact path={RoutePath.problemReport} component={ProblemReportPage} />
-              <Route exact path={RoutePath.selectLocation} component={SelectLocationPage} />
-              <Route exact path={RoutePath.filter} component={Filter} />
-            </Switch>
-          </TransitionView>
-        </TransitionContainer>
-      </Focus>
-    );
-  }
-
-  private onNavigation = () => {
-    this.focusRef.current?.resetFocus();
-  };
+  return (
+    <Focus ref={focusRef}>
+      <TransitionContainer onTransitionEnd={onNavigation} {...transition}>
+        <TransitionView viewId={currentLocation.key || ''} routePath={history.location.pathname}>
+          <Switch key={currentLocation.key} location={currentLocation}>
+            <Route exact path={RoutePath.launch} component={Launch} />
+            <Route exact path={RoutePath.login} component={LoginPage} />
+            <Route exact path={RoutePath.tooManyDevices} component={TooManyDevices} />
+            <Route exact path={RoutePath.deviceRevoked} component={DeviceRevokedView} />
+            <Route exact path={RoutePath.main} component={MainView} />
+            <Route exact path={RoutePath.redeemVoucher} component={VoucherInput} />
+            <Route exact path={RoutePath.voucherSuccess} component={VoucherVerificationSuccess} />
+            <Route exact path={RoutePath.timeAdded} component={TimeAdded} />
+            <Route exact path={RoutePath.setupFinished} component={SetupFinished} />
+            <Route exact path={RoutePath.settings} component={Settings} />
+            <Route exact path={RoutePath.selectLanguage} component={SelectLanguage} />
+            <Route exact path={RoutePath.accountSettings} component={Account} />
+            <Route exact path={RoutePath.userInterfaceSettings} component={UserInterfaceSettings} />
+            <Route exact path={RoutePath.vpnSettings} component={VpnSettings} />
+            <Route exact path={RoutePath.wireguardSettings} component={WireguardSettings} />
+            <Route exact path={RoutePath.openVpnSettings} component={OpenVpnSettings} />
+            <Route exact path={RoutePath.splitTunneling} component={SplitTunnelingSettings} />
+            <Route exact path={RoutePath.support} component={Support} />
+            <Route exact path={RoutePath.problemReport} component={ProblemReport} />
+            <Route exact path={RoutePath.debug} component={Debug} />
+            <Route exact path={RoutePath.selectLocation} component={SelectLocation} />
+            <Route exact path={RoutePath.filter} component={Filter} />
+          </Switch>
+        </TransitionView>
+      </TransitionContainer>
+    </Focus>
+  );
 }
-
-const AppRoutesWithRouter = withAppContext(withHistory(AppRouter));
-
-export default AppRoutesWithRouter;

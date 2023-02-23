@@ -15,23 +15,17 @@ import {
   IDeviceRemoval,
   IDnsOptions,
   ILocation,
+  IRelayListWithEndpointData,
   ISettings,
   liftConstraint,
   ObfuscationSettings,
   RelaySettings,
   RelaySettingsUpdate,
   TunnelState,
-  VoucherResponse,
 } from '../shared/daemon-rpc-types';
 import { messages, relayLocations } from '../shared/gettext';
 import { IGuiSettingsState, SYSTEM_PREFERRED_LOCALE_KEY } from '../shared/gui-settings-state';
-import { IRelayListPair, LaunchApplicationResult } from '../shared/ipc-schema';
-import {
-  IChangelog,
-  ICurrentAppVersionInfo,
-  IHistoryObject,
-  ScrollPositions,
-} from '../shared/ipc-types';
+import { IChangelog, ICurrentAppVersionInfo, IHistoryObject } from '../shared/ipc-types';
 import log, { ConsoleOutput } from '../shared/logging';
 import { LogLevel } from '../shared/logging-types';
 import { Scheduler } from '../shared/scheduler';
@@ -39,9 +33,9 @@ import AppRouter from './components/AppRouter';
 import { Changelog } from './components/Changelog';
 import ErrorBoundary from './components/ErrorBoundary';
 import KeyboardNavigation from './components/KeyboardNavigation';
+import Lang from './components/Lang';
 import MacOsScrollbarDetection from './components/MacOsScrollbarDetection';
 import { ModalContainer } from './components/Modal';
-import PlatformWindowContainer from './containers/PlatformWindowContainer';
 import { AppContext } from './context';
 import History, { ITransitionSpecification, transitions } from './lib/history';
 import { loadTranslations } from './lib/load-translations';
@@ -76,7 +70,7 @@ const SUPPORTED_LOCALE_LIST = [
   { name: 'မြန်မာဘာသာ', code: 'my' },
   { name: 'Nederlands', code: 'nl' },
   { name: 'Norsk', code: 'nb' },
-  { name: 'Język polski', code: 'pl' },
+  { name: 'Polski', code: 'pl' },
   { name: 'Português', code: 'pt' },
   { name: 'Русский', code: 'ru' },
   { name: 'Svenska', code: 'sv' },
@@ -99,11 +93,10 @@ export default class AppRenderer {
 
   private location?: Partial<ILocation>;
   private lastDisconnectedLocation?: Partial<ILocation>;
-  private relayListPair!: IRelayListPair;
+  private relayList?: IRelayListWithEndpointData;
   private tunnelState!: TunnelState;
   private settings!: ISettings;
   private deviceState?: DeviceState;
-  private guiSettings!: IGuiSettingsState;
   private loginState: LoginState = 'none';
   private previousLoginState: LoginState = 'none';
   private loginScheduler = new Scheduler();
@@ -132,6 +125,10 @@ export default class AppRenderer {
       this.setIsPerformingPostUpgrade(isPerformingPostUpgrade);
     });
 
+    IpcRendererEventChannel.daemon.listenDaemonAllowed((daemonAllowed) => {
+      this.reduxActions.userInterface.setDaemonAllowed(daemonAllowed);
+    });
+
     IpcRendererEventChannel.account.listen((newAccountData?: IAccountData) => {
       this.setAccountExpiry(newAccountData?.expiry);
     });
@@ -158,7 +155,7 @@ export default class AppRenderer {
       this.updateBlockedState(this.tunnelState, newSettings.blockWhenDisconnected);
     });
 
-    IpcRendererEventChannel.relays.listen((relayListPair: IRelayListPair) => {
+    IpcRendererEventChannel.relays.listen((relayListPair: IRelayListWithEndpointData) => {
       this.setRelayListPair(relayListPair);
     });
 
@@ -190,9 +187,7 @@ export default class AppRenderer {
       this.reduxActions.userInterface.setMacOsScrollbarVisibility(visibility);
     });
 
-    IpcRendererEventChannel.navigation.listenReset(() =>
-      this.history.dismiss(true, transitions.none),
-    );
+    IpcRendererEventChannel.navigation.listenReset(() => this.history.pop(true));
 
     // Request the initial state from the main process
     const initialState = IpcRendererEventChannel.state.get();
@@ -213,6 +208,10 @@ export default class AppRenderer {
     this.setSettings(initialState.settings);
     this.setIsPerformingPostUpgrade(initialState.isPerformingPostUpgrade);
 
+    if (initialState.daemonAllowed !== undefined) {
+      this.reduxActions.userInterface.setDaemonAllowed(initialState.daemonAllowed);
+    }
+
     if (initialState.deviceState) {
       const deviceState = initialState.deviceState;
       this.handleDeviceEvent(
@@ -225,7 +224,7 @@ export default class AppRenderer {
     this.setTunnelState(initialState.tunnelState);
     this.updateBlockedState(initialState.tunnelState, initialState.settings.blockWhenDisconnected);
 
-    this.setRelayListPair(initialState.relayListPair);
+    this.setRelayListPair(initialState.relayList);
     this.setCurrentVersion(initialState.currentVersion);
     this.setUpgradeVersion(initialState.upgradeVersion);
     this.setGuiSettings(initialState.guiSettings);
@@ -255,8 +254,6 @@ export default class AppRenderer {
 
     void this.updateLocation();
 
-    this.reduxActions.userInterface.setScrollPositions(initialState.scrollPositions);
-
     if (initialState.navigationHistory) {
       // Set last action to POP to trigger automatic scrolling to saved coordinates.
       initialState.navigationHistory.lastAction = 'POP';
@@ -265,14 +262,19 @@ export default class AppRenderer {
       const navigationBase = this.getNavigationBase();
       this.history = new History(navigationBase);
     }
+
+    if (window.env.e2e) {
+      // Make the current location available to the tests if running e2e tests
+      window.e2e = { location: this.history.location.pathname };
+    }
   }
 
   public renderView() {
     return (
       <AppContext.Provider value={{ app: this }}>
         <Provider store={this.reduxStore}>
-          <Router history={this.history.asHistory}>
-            <PlatformWindowContainer>
+          <Lang>
+            <Router history={this.history.asHistory}>
               <ErrorBoundary>
                 <ModalContainer>
                   <KeyboardNavigation>
@@ -282,12 +284,57 @@ export default class AppRenderer {
                   {window.env.platform === 'darwin' && <MacOsScrollbarDetection />}
                 </ModalContainer>
               </ErrorBoundary>
-            </PlatformWindowContainer>
-          </Router>
+            </Router>
+          </Lang>
         </Provider>
       </AppContext.Provider>
     );
   }
+
+  public submitVoucher = (code: string) => IpcRendererEventChannel.account.submitVoucher(code);
+  public updateAccountData = () => IpcRendererEventChannel.account.updateData();
+  public getDeviceState = () => IpcRendererEventChannel.account.getDeviceState();
+  public removeDevice = (device: IDeviceRemoval) =>
+    IpcRendererEventChannel.account.removeDevice(device);
+  public connectTunnel = () => IpcRendererEventChannel.tunnel.connect();
+  public disconnectTunnel = () => IpcRendererEventChannel.tunnel.disconnect();
+  public reconnectTunnel = () => IpcRendererEventChannel.tunnel.reconnect();
+  public updateRelaySettings = (relaySettings: RelaySettingsUpdate) =>
+    IpcRendererEventChannel.settings.updateRelaySettings(relaySettings);
+  public updateBridgeSettings = (bridgeSettings: BridgeSettings) =>
+    IpcRendererEventChannel.settings.updateBridgeSettings(bridgeSettings);
+  public setDnsOptions = (dnsOptions: IDnsOptions) =>
+    IpcRendererEventChannel.settings.setDnsOptions(dnsOptions);
+  public clearAccountHistory = () => IpcRendererEventChannel.accountHistory.clear();
+  public setAutoConnect = (value: boolean) =>
+    IpcRendererEventChannel.guiSettings.setAutoConnect(value);
+  public setEnableSystemNotifications = (value: boolean) =>
+    IpcRendererEventChannel.guiSettings.setEnableSystemNotifications(value);
+  public setStartMinimized = (value: boolean) =>
+    IpcRendererEventChannel.guiSettings.setStartMinimized(value);
+  public setMonochromaticIcon = (value: boolean) =>
+    IpcRendererEventChannel.guiSettings.setMonochromaticIcon(value);
+  public setUnpinnedWindow = (value: boolean) =>
+    IpcRendererEventChannel.guiSettings.setUnpinnedWindow(value);
+  public getLinuxSplitTunnelingApplications = () =>
+    IpcRendererEventChannel.linuxSplitTunneling.getApplications();
+  public launchExcludedApplication = (application: ILinuxSplitTunnelingApplication | string) =>
+    IpcRendererEventChannel.linuxSplitTunneling.launchApplication(application);
+  public setSplitTunnelingState = (state: boolean) =>
+    IpcRendererEventChannel.windowsSplitTunneling.setState(state);
+  public addSplitTunnelingApplication = (application: string | IWindowsApplication) =>
+    IpcRendererEventChannel.windowsSplitTunneling.addApplication(application);
+  public forgetManuallyAddedSplitTunnelingApplication = (application: IWindowsApplication) =>
+    IpcRendererEventChannel.windowsSplitTunneling.forgetManuallyAddedApplication(application);
+  public setObfuscationSettings = (obfuscationSettings: ObfuscationSettings) =>
+    IpcRendererEventChannel.settings.setObfuscationSettings(obfuscationSettings);
+  public collectProblemReport = (toRedact: string | undefined) =>
+    IpcRendererEventChannel.problemReport.collectLogs(toRedact);
+  public viewLog = (path: string) => IpcRendererEventChannel.problemReport.viewLog(path);
+  public quit = () => IpcRendererEventChannel.app.quit();
+  public openUrl = (url: string) => IpcRendererEventChannel.app.openUrl(url);
+  public showOpenDialog = (options: Electron.OpenDialogOptions) =>
+    IpcRendererEventChannel.app.showOpenDialog(options);
 
   public login = async (accountToken: AccountToken) => {
     const actions = this.reduxActions;
@@ -309,7 +356,7 @@ export default class AppRenderer {
           actions.account.loginTooManyDevices(error);
           this.loginState = 'too many devices';
 
-          this.history.reset(RoutePath.tooManyDevices, transitions.push);
+          this.history.reset(RoutePath.tooManyDevices, { transition: transitions.push });
         } catch (e) {
           const error = e as Error;
           log.error('Failed to fetch device list');
@@ -327,18 +374,18 @@ export default class AppRenderer {
     this.loginState = 'none';
   };
 
-  public async logout() {
+  public logout = async (transition = transitions.dismiss) => {
     try {
+      this.history.reset(RoutePath.login, { transition });
       await IpcRendererEventChannel.account.logout();
     } catch (e) {
       const error = e as Error;
       log.info('Failed to logout: ', error.message);
     }
-  }
+  };
 
   public leaveRevokedDevice = async () => {
-    await this.logout();
-    this.resetNavigation();
+    await this.logout(transitions.pop);
     await this.disconnectTunnel();
   };
 
@@ -358,55 +405,11 @@ export default class AppRenderer {
     }
   }
 
-  public submitVoucher(voucherCode: string): Promise<VoucherResponse> {
-    return IpcRendererEventChannel.account.submitVoucher(voucherCode);
-  }
-
-  public updateAccountData(): void {
-    IpcRendererEventChannel.account.updateData();
-  }
-
-  public getDeviceState = (): Promise<DeviceState> => {
-    return IpcRendererEventChannel.account.getDeviceState();
-  };
-
   public fetchDevices = async (accountToken: AccountToken): Promise<Array<IDevice>> => {
     const devices = await IpcRendererEventChannel.account.listDevices(accountToken);
     this.reduxActions.account.updateDevices(devices);
     return devices;
   };
-
-  public removeDevice(deviceRemoval: IDeviceRemoval): Promise<void> {
-    return IpcRendererEventChannel.account.removeDevice(deviceRemoval);
-  }
-
-  public async connectTunnel(): Promise<void> {
-    return IpcRendererEventChannel.tunnel.connect();
-  }
-
-  public async disconnectTunnel(): Promise<void> {
-    return IpcRendererEventChannel.tunnel.disconnect();
-  }
-
-  public async reconnectTunnel(): Promise<void> {
-    return IpcRendererEventChannel.tunnel.reconnect();
-  }
-
-  public updateRelaySettings(relaySettings: RelaySettingsUpdate) {
-    return IpcRendererEventChannel.settings.updateRelaySettings(relaySettings);
-  }
-
-  public updateBridgeSettings(bridgeSettings: BridgeSettings) {
-    return IpcRendererEventChannel.settings.updateBridgeSettings(bridgeSettings);
-  }
-
-  public setDnsOptions(dns: IDnsOptions) {
-    return IpcRendererEventChannel.settings.setDnsOptions(dns);
-  }
-
-  public clearAccountHistory(): Promise<void> {
-    return IpcRendererEventChannel.accountHistory.clear();
-  }
 
   public openLinkWithAuth = async (link: string): Promise<void> => {
     let token = '';
@@ -461,13 +464,11 @@ export default class AppRenderer {
     await IpcRendererEventChannel.settings.setWireguardMtu(mtu);
   };
 
-  public setAutoConnect(autoConnect: boolean) {
-    IpcRendererEventChannel.guiSettings.setAutoConnect(autoConnect);
-  }
-
-  public setEnableSystemNotifications(flag: boolean) {
-    IpcRendererEventChannel.guiSettings.setEnableSystemNotifications(flag);
-  }
+  public setWireguardQuantumResistant = async (quantumResistant?: boolean) => {
+    const actions = this.reduxActions;
+    actions.settings.updateWireguardQuantumResistant(quantumResistant);
+    await IpcRendererEventChannel.settings.setWireguardQuantumResistant(quantumResistant);
+  };
 
   public setAutoStart = (autoStart: boolean): Promise<void> => {
     this.storeAutoStart(autoStart);
@@ -475,56 +476,16 @@ export default class AppRenderer {
     return IpcRendererEventChannel.autoStart.set(autoStart);
   };
 
-  public setStartMinimized(startMinimized: boolean) {
-    IpcRendererEventChannel.guiSettings.setStartMinimized(startMinimized);
-  }
-
-  public setMonochromaticIcon(monochromaticIcon: boolean) {
-    IpcRendererEventChannel.guiSettings.setMonochromaticIcon(monochromaticIcon);
-  }
-
-  public setUnpinnedWindow(unpinnedWindow: boolean) {
-    IpcRendererEventChannel.guiSettings.setUnpinnedWindow(unpinnedWindow);
-  }
-
-  public getLinuxSplitTunnelingApplications() {
-    return IpcRendererEventChannel.linuxSplitTunneling.getApplications();
-  }
-
   public getWindowsSplitTunnelingApplications(updateCache = false) {
     return IpcRendererEventChannel.windowsSplitTunneling.getApplications(updateCache);
-  }
-
-  public launchExcludedApplication(
-    application: ILinuxSplitTunnelingApplication | string,
-  ): Promise<LaunchApplicationResult> {
-    return IpcRendererEventChannel.linuxSplitTunneling.launchApplication(application);
-  }
-
-  public setSplitTunnelingState = (enabled: boolean): Promise<void> => {
-    return IpcRendererEventChannel.windowsSplitTunneling.setState(enabled);
-  };
-
-  public addSplitTunnelingApplication(application: IWindowsApplication | string): Promise<void> {
-    return IpcRendererEventChannel.windowsSplitTunneling.addApplication(application);
   }
 
   public removeSplitTunnelingApplication(application: IWindowsApplication) {
     void IpcRendererEventChannel.windowsSplitTunneling.removeApplication(application);
   }
 
-  public forgetManuallyAddedSplitTunnelingApplication(application: IWindowsApplication) {
-    return IpcRendererEventChannel.windowsSplitTunneling.forgetManuallyAddedApplication(
-      application,
-    );
-  }
-
-  public setObfuscationSettings(obfuscationSettings: ObfuscationSettings) {
-    return IpcRendererEventChannel.settings.setObfuscationSettings(obfuscationSettings);
-  }
-
-  public collectProblemReport(toRedact?: string): Promise<string> {
-    return IpcRendererEventChannel.problemReport.collectLogs(toRedact);
+  public async showLaunchDaemonSettings() {
+    await IpcRendererEventChannel.app.showLaunchDaemonSettings();
   }
 
   public async sendProblemReport(
@@ -533,24 +494,6 @@ export default class AppRenderer {
     savedReportId: string,
   ): Promise<void> {
     await IpcRendererEventChannel.problemReport.sendReport({ email, message, savedReportId });
-  }
-
-  public viewLog(id: string): Promise<string> {
-    return IpcRendererEventChannel.problemReport.viewLog(id);
-  }
-
-  public quit(): void {
-    IpcRendererEventChannel.app.quit();
-  }
-
-  public openUrl(url: string): Promise<void> {
-    return IpcRendererEventChannel.app.openUrl(url);
-  }
-
-  public showOpenDialog(
-    options: Electron.OpenDialogOptions,
-  ): Promise<Electron.OpenDialogReturnValue> {
-    return IpcRendererEventChannel.app.showOpenDialog(options);
   }
 
   public getPreferredLocaleList(): IPreferredLocaleDescriptor[] {
@@ -565,7 +508,7 @@ export default class AppRenderer {
     ];
   }
 
-  public async setPreferredLocale(preferredLocale: string): Promise<void> {
+  public setPreferredLocale = async (preferredLocale: string): Promise<void> => {
     const translations = await IpcRendererEventChannel.guiSettings.setPreferredLocale(
       preferredLocale,
     );
@@ -576,7 +519,7 @@ export default class AppRenderer {
     // load translations for new locale
     loadTranslations(messages, translations.locale, translations.messages);
     loadTranslations(relayLocations, translations.locale, translations.relayLocations);
-  }
+  };
 
   public getPreferredLocaleDisplayName = (localeCode: string): string => {
     const preferredLocale = this.getPreferredLocaleList().find((item) => item.code === localeCode);
@@ -590,10 +533,10 @@ export default class AppRenderer {
 
   public setNavigationHistory(history: IHistoryObject) {
     IpcRendererEventChannel.navigation.setHistory(history);
-  }
 
-  public setScrollPositions(scrollPositions: ScrollPositions) {
-    IpcRendererEventChannel.navigation.setScrollPositions(scrollPositions);
+    if (window.env.e2e) {
+      window.e2e.location = history.entries[history.index].pathname;
+    }
   }
 
   private isLoggedIn(): boolean {
@@ -605,13 +548,7 @@ export default class AppRenderer {
   // the one we have set.
   // https://github.com/electron/electron/issues/28777
   private checkContentHeight(resize: boolean): void {
-    let expectedContentHeight = 568;
-
-    // The app content is 12px taller on macOS to fit the top arrow.
-    if (window.env.platform === 'darwin' && !this.guiSettings.unpinnedWindow) {
-      expectedContentHeight += 12;
-    }
-
+    const expectedContentHeight = 568;
     const contentHeight = window.innerHeight;
     if (contentHeight !== expectedContentHeight) {
       log.verbose(
@@ -698,6 +635,7 @@ export default class AppRenderer {
   private onDaemonConnected() {
     this.connectedToDaemon = true;
     this.reduxActions.userInterface.setConnectedToDaemon(true);
+    this.reduxActions.userInterface.setDaemonAllowed(true);
     this.resetNavigation();
   }
 
@@ -727,7 +665,7 @@ export default class AppRenderer {
             [RoutePath.launch]: transitions.push,
             [RoutePath.main]: transitions.pop,
             [RoutePath.deviceRevoked]: transitions.pop,
-            '*': transitions.none,
+            '*': transitions.dismiss,
           },
           [RoutePath.main]: {
             [RoutePath.launch]: transitions.push,
@@ -742,7 +680,7 @@ export default class AppRenderer {
 
         const transition =
           navigationTransitions[nextPath]?.[pathname] ?? navigationTransitions[nextPath]?.['*'];
-        this.history.reset(nextPath, transition);
+        this.history.reset(nextPath, { transition });
       }
     }
   }
@@ -814,6 +752,9 @@ export default class AppRenderer {
     reduxSettings.updateShowBetaReleases(newSettings.showBetaReleases);
     reduxSettings.updateOpenVpnMssfix(newSettings.tunnelOptions.openvpn.mssfix);
     reduxSettings.updateWireguardMtu(newSettings.tunnelOptions.wireguard.mtu);
+    reduxSettings.updateWireguardQuantumResistant(
+      newSettings.tunnelOptions.wireguard.quantumResistant,
+    );
     reduxSettings.updateBridgeState(newSettings.bridgeState);
     reduxSettings.updateDnsOptions(newSettings.tunnelOptions.dns);
     reduxSettings.updateSplitTunnelingState(newSettings.splitTunnel.enableExclusions);
@@ -847,7 +788,7 @@ export default class AppRenderer {
         break;
 
       case 'error':
-        actions.updateBlockState(!tunnelState.details.blockFailure);
+        actions.updateBlockState(!tunnelState.details.blockingError);
         break;
     }
   }
@@ -864,6 +805,9 @@ export default class AppRenderer {
 
         switch (this.loginState) {
           case 'none':
+            reduxAccount.loggedIn(accountToken, device);
+            this.resetNavigation();
+            break;
           case 'logging in':
             reduxAccount.loggedIn(accountToken, device);
 
@@ -876,10 +820,6 @@ export default class AppRenderer {
           case 'creating account':
             reduxAccount.accountCreated(accountToken, device, new Date().toISOString());
             break;
-        }
-
-        if (this.loginState !== 'logging in' && this.loginState !== 'creating account') {
-          this.resetNavigation();
         }
         break;
       }
@@ -918,17 +858,16 @@ export default class AppRenderer {
     }
   }
 
-  private setRelayListPair(relayListPair: IRelayListPair) {
-    this.relayListPair = relayListPair;
+  private setRelayListPair(relayListPair?: IRelayListWithEndpointData) {
+    this.relayList = relayListPair;
     this.propagateRelayListPairToRedux();
   }
 
   private propagateRelayListPairToRedux() {
-    const relays = this.relayListPair.relays.countries;
-    const bridges = this.relayListPair.bridges.countries;
-
-    this.reduxActions.settings.updateRelayLocations(relays);
-    this.reduxActions.settings.updateBridgeLocations(bridges);
+    if (this.relayList) {
+      this.reduxActions.settings.updateRelayLocations(this.relayList.relayList.countries);
+      this.reduxActions.settings.updateWireguardEndpointData(this.relayList.wireguardEndpointData);
+    }
   }
 
   private setCurrentVersion(versionInfo: ICurrentAppVersionInfo) {
@@ -944,7 +883,6 @@ export default class AppRenderer {
   }
 
   private setGuiSettings(guiSettings: IGuiSettingsState) {
-    this.guiSettings = guiSettings;
     this.reduxActions.settings.updateGuiSettings(guiSettings);
   }
 

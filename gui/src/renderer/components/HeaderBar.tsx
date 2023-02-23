@@ -5,7 +5,7 @@ import styled from 'styled-components';
 import { colors } from '../../config.json';
 import { TunnelState } from '../../shared/daemon-rpc-types';
 import { messages } from '../../shared/gettext';
-import { useHistory } from '../lib/history';
+import { transitions, useHistory } from '../lib/history';
 import { RoutePath } from '../lib/routes';
 import { IReduxState } from '../redux/store';
 import { FocusFallback } from './Focus';
@@ -32,7 +32,6 @@ interface IHeaderBarContainerProps {
 
 const HeaderBarContainer = styled.header({}, (props: IHeaderBarContainerProps) => ({
   padding: '12px 16px',
-  paddingTop: window.env.platform === 'darwin' && !props.unpinnedWindow ? '24px' : '12px',
   backgroundColor: headerBarStyleColorMap[props.barStyle ?? HeaderBarStyle.default],
 }));
 
@@ -102,7 +101,7 @@ export function HeaderBarSettingsButton(props: IHeaderBarSettingsButtonProps) {
 
   const openSettings = useCallback(() => {
     if (!props.disabled) {
-      history.show(RoutePath.settings);
+      history.push(RoutePath.settings, { transition: transitions.show });
     }
   }, [history, props.disabled]);
 
@@ -140,7 +139,7 @@ export function calculateHeaderBarStyle(tunnelState: TunnelState): HeaderBarStyl
     case 'connected':
       return HeaderBarStyle.success;
     case 'error':
-      return !tunnelState.details.blockFailure ? HeaderBarStyle.success : HeaderBarStyle.error;
+      return !tunnelState.details.blockingError ? HeaderBarStyle.success : HeaderBarStyle.error;
     case 'disconnecting':
       switch (tunnelState.details) {
         case 'block':

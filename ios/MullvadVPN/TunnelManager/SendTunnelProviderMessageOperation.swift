@@ -7,23 +7,26 @@
 //
 
 import Foundation
+import MullvadTypes
 import NetworkExtension
+import Operations
+import TunnelProviderMessaging
 
-private enum MessagingConfiguration {
-    /// Delay for sending tunnel provider messages to the tunnel when in connecting state.
-    /// Used to workaround a bug when talking to the tunnel too early during startup may cause it
-    /// to freeze.
-    static let connectingStateWaitDelay: TimeInterval = 5
+/// Delay for sending tunnel provider messages to the tunnel when in connecting state.
+/// Used to workaround a bug when talking to the tunnel too early during startup may cause it
+/// to freeze.
+private let connectingStateWaitDelay: TimeInterval = 5
 
-    /// Timeout interval in seconds.
-    static let timeout: TimeInterval = 5
-}
+/// Default timeout in seconds.
+private let defaultTimeout: TimeInterval = 5
 
 final class SendTunnelProviderMessageOperation<Output>: ResultOperation<Output, Error> {
     typealias DecoderHandler = (Data?) throws -> Output
 
     private let tunnel: Tunnel
     private let message: TunnelProviderMessage
+    private let timeout: TimeInterval
+
     private let decoderHandler: DecoderHandler
 
     private var statusObserver: TunnelStatusBlockObserver?
@@ -36,11 +39,14 @@ final class SendTunnelProviderMessageOperation<Output>: ResultOperation<Output, 
         dispatchQueue: DispatchQueue,
         tunnel: Tunnel,
         message: TunnelProviderMessage,
+        timeout: TimeInterval? = nil,
         decoderHandler: @escaping DecoderHandler,
-        completionHandler: @escaping CompletionHandler
+        completionHandler: CompletionHandler?
     ) {
         self.tunnel = tunnel
         self.message = message
+        self.timeout = timeout ?? defaultTimeout
+
         self.decoderHandler = decoderHandler
 
         super.init(
@@ -95,13 +101,13 @@ final class SendTunnelProviderMessageOperation<Output>: ResultOperation<Output, 
         timeoutWork = workItem
 
         // Schedule timeout work.
-        let deadline: DispatchWallTime = .now() + MessagingConfiguration.timeout + delay
+        let deadline: DispatchWallTime = .now() + timeout + delay
 
         dispatchQueue.asyncAfter(wallDeadline: deadline, execute: workItem)
     }
 
     private func handleVPNStatus(_ status: NEVPNStatus) {
-        guard !isCancelled && !messageSent else {
+        guard !isCancelled, !messageSent else {
             return
         }
 
@@ -139,12 +145,12 @@ final class SendTunnelProviderMessageOperation<Output>: ResultOperation<Output, 
         waitForConnectingStateWork = nil
 
         // Execute right away if enough time passed since the tunnel was launched.
-        guard timeElapsed < MessagingConfiguration.connectingStateWaitDelay else {
+        guard timeElapsed < connectingStateWaitDelay else {
             block()
             return
         }
 
-        let waitDelay = MessagingConfiguration.connectingStateWaitDelay - timeElapsed
+        let waitDelay = connectingStateWaitDelay - timeElapsed
         let workItem = DispatchWorkItem(block: block)
 
         // Assign new work.
@@ -200,13 +206,14 @@ extension SendTunnelProviderMessageOperation where Output: Codable {
         dispatchQueue: DispatchQueue,
         tunnel: Tunnel,
         message: TunnelProviderMessage,
+        timeout: TimeInterval? = nil,
         completionHandler: @escaping CompletionHandler
-    )
-    {
+    ) {
         self.init(
             dispatchQueue: dispatchQueue,
             tunnel: tunnel,
             message: message,
+            timeout: timeout,
             decoderHandler: { data in
                 if let data = data {
                     return try TunnelProviderReply(messageData: data).value
@@ -224,19 +231,21 @@ extension SendTunnelProviderMessageOperation where Output == Void {
         dispatchQueue: DispatchQueue,
         tunnel: Tunnel,
         message: TunnelProviderMessage,
-        completionHandler: @escaping CompletionHandler
+        timeout: TimeInterval? = nil,
+        completionHandler: CompletionHandler?
     ) {
         self.init(
             dispatchQueue: dispatchQueue,
             tunnel: tunnel,
             message: message,
+            timeout: timeout,
             decoderHandler: { _ in () },
             completionHandler: completionHandler
         )
     }
 }
 
-enum SendTunnelProviderMessageError: ChainedError {
+enum SendTunnelProviderMessageError: LocalizedError, WrappingError {
     /// Tunnel process is either down or about to go down.
     case tunnelDown(NEVPNStatus)
 
@@ -244,16 +253,25 @@ enum SendTunnelProviderMessageError: ChainedError {
     case timeout
 
     /// System error.
-    case system(Swift.Error)
+    case system(Error)
 
     var errorDescription: String? {
         switch self {
-        case .tunnelDown(let status):
+        case let .tunnelDown(status):
             return "Tunnel is either down or about to go down (status: \(status))."
         case .timeout:
             return "Send timeout."
-        case .system:
-            return "System error."
+        case let .system(error):
+            return "System error: \(error.localizedDescription)"
+        }
+    }
+
+    var underlyingError: Error? {
+        switch self {
+        case let .system(error):
+            return error
+        case .timeout, .tunnelDown:
+            return nil
         }
     }
 }

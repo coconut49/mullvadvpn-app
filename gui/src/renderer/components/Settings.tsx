@@ -35,15 +35,14 @@ export default function Support() {
   const loginState = useSelector((state) => state.account.status);
   const connectedToDaemon = useSelector((state) => state.userInterface.connectedToDaemon);
 
-  const showLargeTitle = loginState.type !== 'ok';
   const showSubSettings = loginState.type === 'ok' && connectedToDaemon;
 
   return (
-    <BackAction icon="close" action={history.dismiss}>
+    <BackAction action={history.pop}>
       <Layout>
         <SettingsContainer>
           <NavigationContainer>
-            <NavigationBar alwaysDisplayBarTitle={!showLargeTitle}>
+            <NavigationBar>
               <NavigationItems>
                 <TitleBarItem>
                   {
@@ -56,18 +55,16 @@ export default function Support() {
 
             <StyledNavigationScrollbars fillContainer>
               <StyledContent>
-                {showLargeTitle && (
-                  <SettingsHeader>
-                    <HeaderTitle>{messages.pgettext('navigation-bar', 'Settings')}</HeaderTitle>
-                  </SettingsHeader>
-                )}
+                <SettingsHeader>
+                  <HeaderTitle>{messages.pgettext('navigation-bar', 'Settings')}</HeaderTitle>
+                </SettingsHeader>
 
                 <StyledSettingsContent>
-                  {showSubSettings && (
+                  {showSubSettings ? (
                     <>
                       <Cell.Group>
                         <AccountButton />
-                        <InterfaceSettingsButton />
+                        <UserInterfaceSettingsButton />
                         <VpnSettingsButton />
                       </Cell.Group>
 
@@ -77,12 +74,22 @@ export default function Support() {
                         </Cell.Group>
                       )}
                     </>
+                  ) : (
+                    <Cell.Group>
+                      <UserInterfaceSettingsButton />
+                    </Cell.Group>
                   )}
 
                   <Cell.Group>
                     <SupportButton />
                     <AppVersionButton />
                   </Cell.Group>
+
+                  {window.env.development && (
+                    <Cell.Group>
+                      <DebugButton />
+                    </Cell.Group>
+                  )}
                 </StyledSettingsContent>
               </StyledContent>
 
@@ -119,16 +126,16 @@ function AccountButton() {
   );
 }
 
-function InterfaceSettingsButton() {
+function UserInterfaceSettingsButton() {
   const history = useHistory();
-  const navigate = useCallback(() => history.push(RoutePath.interfaceSettings), [history]);
+  const navigate = useCallback(() => history.push(RoutePath.userInterfaceSettings), [history]);
 
   return (
     <Cell.CellNavigationButton onClick={navigate}>
       <Cell.Label>
         {
-          // TRANSLATORS: Navigation button to the 'Interface settings' view
-          messages.pgettext('settings-view', 'Interface settings')
+          // TRANSLATORS: Navigation button to the 'User interface settings' view
+          messages.pgettext('settings-view', 'User interface settings')
         }
       </Cell.Label>
     </Cell.CellNavigationButton>
@@ -197,9 +204,9 @@ function AppVersionButton() {
 
     icon = <StyledCellIcon source="icon-alert" width={18} tintColor={colors.red} />;
     footer = (
-      <Cell.Footer>
-        <Cell.FooterText>{message}</Cell.FooterText>
-      </Cell.Footer>
+      <Cell.CellFooter>
+        <Cell.CellFooterText>{message}</Cell.CellFooterText>
+      </Cell.CellFooter>
     );
   }
 
@@ -236,12 +243,26 @@ function SupportButton() {
   );
 }
 
+function DebugButton() {
+  const history = useHistory();
+  const navigate = useCallback(() => history.push(RoutePath.debug), [history]);
+
+  return (
+    <Cell.CellNavigationButton onClick={navigate}>
+      <Cell.Label>Developer tools</Cell.Label>
+    </Cell.CellNavigationButton>
+  );
+}
+
 function QuitButton() {
   const { quit } = useAppContext();
+  const tunnelState = useSelector((state) => state.connection.status);
 
   return (
     <StyledQuitButton onClick={quit}>
-      {messages.pgettext('settings-view', 'Quit app')}
+      {tunnelState.state === 'disconnected'
+        ? messages.gettext('Quit')
+        : messages.gettext('Disconnect & quit')}
     </StyledQuitButton>
   );
 }

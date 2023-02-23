@@ -2,16 +2,17 @@ use crate::{
     relay_constraints::{
         BridgeConstraints, BridgeSettings, BridgeState, Constraint, LocationConstraint,
         ObfuscationSettings, RelayConstraints, RelaySettings, RelaySettingsUpdate,
-        SelectedObfuscation,
+        SelectedObfuscation, WireguardConstraints,
     },
     wireguard,
 };
 #[cfg(target_os = "android")]
 use jnix::IntoJava;
+use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(target_os = "windows")]
 use std::{collections::HashSet, path::PathBuf};
-use talpid_types::net::{self, openvpn, GenericTunnelOptions};
+use talpid_types::net::{openvpn, GenericTunnelOptions};
 
 mod dns;
 
@@ -21,7 +22,7 @@ mod dns;
 /// being added to `mullvad-daemon`.
 pub const CURRENT_SETTINGS_VERSION: SettingsVersion = SettingsVersion::V6;
 
-#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Clone, Copy)]
 #[repr(u32)]
 pub enum SettingsVersion {
     V2 = 2,
@@ -43,8 +44,7 @@ impl<'de> Deserialize<'de> for SettingsVersion {
             v if v == SettingsVersion::V5 as u32 => Ok(SettingsVersion::V5),
             v if v == SettingsVersion::V6 as u32 => Ok(SettingsVersion::V6),
             v => Err(serde::de::Error::custom(format!(
-                "{} is not a valid SettingsVersion",
-                v
+                "{v} is not a valid SettingsVersion"
             ))),
         }
     }
@@ -60,7 +60,7 @@ impl Serialize for SettingsVersion {
 }
 
 /// Mullvad daemon settings.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 #[cfg_attr(target_os = "android", derive(IntoJava))]
 #[cfg_attr(target_os = "android", jnix(package = "net.mullvad.mullvadvpn.model"))]
@@ -88,13 +88,25 @@ pub struct Settings {
     /// Split tunneling settings
     #[cfg(windows)]
     pub split_tunnel: SplitTunnelSettings,
+    /// Temporary variable for a random number between 0 and 1 that determines if the user should
+    /// use wireguard or openvpn when the automatic feature is set. This variable will be removed
+    /// in future versions.
+    /// A value of -1.0 implies that the variable should be initialized to a random number.
+    /// NOTE: This field will be removed completely in future versions.
+    #[serde(default = "out_of_range_wg_migration_rand_num")]
+    #[cfg_attr(target_os = "android", jnix(skip))]
+    pub wg_migration_rand_num: f32,
     /// Specifies settings schema version
     #[cfg_attr(target_os = "android", jnix(skip))]
     settings_version: SettingsVersion,
 }
 
+fn out_of_range_wg_migration_rand_num() -> f32 {
+    -1.0
+}
+
 #[cfg(windows)]
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct SplitTunnelSettings {
     /// Toggles split tunneling on or off
     pub enable_exclusions: bool,
@@ -107,6 +119,10 @@ impl Default for Settings {
         Settings {
             relay_settings: RelaySettings::Normal(RelayConstraints {
                 location: Constraint::Only(LocationConstraint::Country("se".to_owned())),
+                wireguard_constraints: WireguardConstraints {
+                    entry_location: Constraint::Only(LocationConstraint::Country("se".to_owned())),
+                    ..Default::default()
+                },
                 ..Default::default()
             }),
             bridge_settings: BridgeSettings::Normal(BridgeConstraints::default()),
@@ -120,6 +136,7 @@ impl Default for Settings {
             auto_connect: false,
             tunnel_options: TunnelOptions::default(),
             show_beta_releases: false,
+            wg_migration_rand_num: rand::thread_rng().gen_range(0.0..=1.0),
             #[cfg(windows)]
             split_tunnel: SplitTunnelSettings::default(),
             settings_version: CURRENT_SETTINGS_VERSION,
@@ -171,7 +188,7 @@ impl Settings {
 }
 
 /// TunnelOptions holds configuration data that applies to all kinds of tunnels.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[cfg_attr(target_os = "android", derive(IntoJava))]
 #[cfg_attr(target_os = "android", jnix(package = "net.mullvad.mullvadvpn.model"))]
@@ -190,17 +207,11 @@ pub struct TunnelOptions {
 
 pub use dns::{CustomDnsOptions, DefaultDnsOptions, DnsOptions, DnsState};
 
-#[cfg(target_os = "android")]
-pub use dns::AndroidDnsOptions;
-
 impl Default for TunnelOptions {
     fn default() -> Self {
         TunnelOptions {
             openvpn: openvpn::TunnelOptions::default(),
-            wireguard: wireguard::TunnelOptions {
-                options: net::wireguard::TunnelOptions::default(),
-                rotation_interval: None,
-            },
+            wireguard: wireguard::TunnelOptions::default(),
             generic: GenericTunnelOptions {
                 // Enable IPv6 be default on Android
                 enable_ipv6: cfg!(target_os = "android"),

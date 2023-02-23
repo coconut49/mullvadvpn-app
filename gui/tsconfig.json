@@ -2,6 +2,7 @@
   "compilerOptions": {
     "alwaysStrict": true,
     "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
     "jsx": "react-jsx",
     "module": "commonjs",
     "noImplicitReturns": true,
@@ -15,8 +16,11 @@
     ],
     "skipLibCheck": true,
     "strict": true,
-    "target": "es2020",
-    "lib": ["es2020", "dom"],
+    "target": "es2021",
+    "lib": [
+      "es2021",
+      "dom"
+    ],
     "typeRoots": [
       "./types",
       "node_modules/@types"
@@ -28,6 +32,10 @@
   "include": [
     "src/**/*.ts",
     "src/**/*.tsx",
+    "playwright.config.ts",
+    "standalone-tests.ts",
+    "scripts/**/*.ts",
+    "test/**/*.ts",
     "assets/geo/*.json"
   ]
 }

@@ -1,6 +1,6 @@
-use crate::{logging::windows::log_sink, tunnel::TunnelMetadata};
+use crate::tunnel::TunnelMetadata;
 
-use std::{net::IpAddr, path::Path, ptr};
+use std::{ffi::CStr, io, net::IpAddr, path::Path, ptr};
 
 use self::winfw::*;
 use super::{FirewallArguments, FirewallPolicy, InitialFirewallState};
@@ -9,6 +9,7 @@ use talpid_types::{
     tunnel::FirewallPolicyError,
 };
 use widestring::WideCString;
+use windows_sys::Win32::Globalization::{MultiByteToWideChar, CP_ACP};
 
 /// Errors that can happen when configuring the Windows firewall.
 #[derive(err_derive::Error, Debug)]
@@ -128,7 +129,7 @@ impl Firewall {
                 let cfg = &WinFwSettings::new(allow_lan);
                 self.set_blocked_state(
                     &cfg,
-                    &WinFwAllowedEndpointContainer::from(allowed_endpoint).as_endpoint(),
+                    allowed_endpoint.map(|endpoint| WinFwAllowedEndpointContainer::from(endpoint)),
                 )
             }
         }
@@ -255,13 +256,23 @@ impl Firewall {
     fn set_blocked_state(
         &mut self,
         winfw_settings: &WinFwSettings,
-        allowed_endpoint: &WinFwAllowedEndpoint<'_>,
+        allowed_endpoint: Option<WinFwAllowedEndpointContainer>,
     ) -> Result<(), Error> {
         log::trace!("Applying 'blocked' firewall policy");
+        let endpoint = allowed_endpoint
+            .as_ref()
+            .map(WinFwAllowedEndpointContainer::as_endpoint);
+
         unsafe {
-            WinFw_ApplyPolicyBlocked(winfw_settings, allowed_endpoint)
-                .into_result()
-                .map_err(Error::ApplyingBlockedPolicy)
+            WinFw_ApplyPolicyBlocked(
+                winfw_settings,
+                endpoint
+                    .as_ref()
+                    .map(|container| container as *const _)
+                    .unwrap_or(ptr::null()),
+            )
+            .into_result()
+            .map_err(Error::ApplyingBlockedPolicy)
         }
     }
 }
@@ -284,12 +295,90 @@ fn widestring_ip(ip: IpAddr) -> WideCString {
     WideCString::from_str_truncate(ip.to_string())
 }
 
+/// Logging callback implementation.
+pub extern "system" fn log_sink(
+    level: log::Level,
+    msg: *const libc::c_char,
+    context: *mut libc::c_void,
+) {
+    if msg.is_null() {
+        log::error!("Log message from FFI boundary is NULL");
+    } else {
+        let rust_log_level = log::Level::from(level);
+        let target = if context.is_null() {
+            "UNKNOWN".into()
+        } else {
+            unsafe { CStr::from_ptr(context as *const _).to_string_lossy() }
+        };
+
+        let mb_string = unsafe { CStr::from_ptr(msg) };
+
+        let managed_msg = match multibyte_to_wide(mb_string, CP_ACP) {
+            Ok(wide_str) => String::from_utf16_lossy(&wide_str),
+            // Best effort:
+            Err(_) => mb_string.to_string_lossy().into_owned(),
+        };
+
+        log::logger().log(
+            &log::Record::builder()
+                .level(rust_log_level)
+                .target(&target)
+                .args(format_args!("{}", managed_msg))
+                .build(),
+        );
+    }
+}
+
+fn multibyte_to_wide(mb_string: &CStr, codepage: u32) -> Result<Vec<u16>, io::Error> {
+    if unsafe { *mb_string.as_ptr() } == 0 {
+        return Ok(vec![]);
+    }
+
+    let wc_size = unsafe {
+        MultiByteToWideChar(
+            codepage,
+            0,
+            mb_string.as_ptr() as *const u8,
+            -1,
+            ptr::null_mut(),
+            0,
+        )
+    };
+
+    if wc_size == 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut wc_buffer = Vec::with_capacity(wc_size as usize);
+
+    let chars_written = unsafe {
+        MultiByteToWideChar(
+            codepage,
+            0,
+            mb_string.as_ptr() as *const u8,
+            -1,
+            wc_buffer.as_mut_ptr(),
+            wc_size,
+        )
+    };
+
+    if chars_written == 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    unsafe { wc_buffer.set_len((chars_written - 1) as usize) };
+
+    Ok(wc_buffer)
+}
+
 #[allow(non_snake_case)]
 mod winfw {
     use super::{widestring_ip, AllowedEndpoint, AllowedTunnelTraffic, Error, WideCString};
-    use crate::logging::windows::LogSink;
     use libc;
     use talpid_types::net::TransportProtocol;
+
+    type LogSink =
+        extern "system" fn(level: log::Level, msg: *const libc::c_char, context: *mut libc::c_void);
 
     pub struct WinFwAllowedEndpointContainer {
         _clients: Box<[WideCString]>,

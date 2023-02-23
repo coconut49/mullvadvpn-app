@@ -108,10 +108,14 @@ msgstr ""
 msgid "Connecting"
 msgstr ""
 
+#. Creating a secure connection that isn't breakable by quantum computers.
 msgid "CREATING QUANTUM SECURE CONNECTION"
 msgstr ""
 
 msgid "CREATING SECURE CONNECTION"
+msgstr ""
+
+msgid "Custom"
 msgstr ""
 
 msgid "Default"
@@ -121,6 +125,9 @@ msgid "Disable"
 msgstr ""
 
 msgid "Disconnect"
+msgstr ""
+
+msgid "Disconnect & quit"
 msgstr ""
 
 msgid "Disconnected"
@@ -139,6 +146,9 @@ msgid "FAILED TO SECURE CONNECTION"
 msgstr ""
 
 msgid "Filter"
+msgstr ""
+
+msgid "Go to System Settings"
 msgstr ""
 
 #. This is a button which closes a dialog.
@@ -166,6 +176,9 @@ msgstr ""
 msgid "Next"
 msgstr ""
 
+msgid "No result for <b>%(searchTerm)s</b>."
+msgstr ""
+
 msgid "Off"
 msgstr ""
 
@@ -175,10 +188,17 @@ msgstr ""
 msgid "Open URL"
 msgstr ""
 
+#. The connection is secure and isn't breakable by quantum computers.
 msgid "QUANTUM SECURE CONNECTION"
 msgstr ""
 
+msgid "Quit"
+msgstr ""
+
 msgid "Reconnect"
+msgstr ""
+
+msgid "Search for..."
 msgstr ""
 
 msgid "SECURE CONNECTION"
@@ -195,6 +215,12 @@ msgstr ""
 
 #. Warning text in a dialog that is displayed after a setting is toggled.
 msgid "This setting increases latency. Use only if needed."
+msgstr ""
+
+msgid "Troubleshoot"
+msgstr ""
+
+msgid "Try a different search."
 msgstr ""
 
 msgid "UDP"
@@ -232,6 +258,10 @@ msgstr ""
 #. the button which obscures the account number.
 msgctxt "accessibility"
 msgid "Hide account number"
+msgstr ""
+
+msgctxt "accessibility"
+msgid "info"
 msgstr ""
 
 #. This is used by screenreaders to communicate the login button.
@@ -303,7 +333,7 @@ msgid "Too many simultaneous connections on this account. Disconnect another dev
 msgstr ""
 
 msgctxt "auth-failure"
-msgid "Unable to authenticate account. Please contact support."
+msgid "Unable to authenticate account. Please send a problem report."
 msgstr ""
 
 msgctxt "auth-failure"
@@ -321,10 +351,6 @@ msgstr ""
 #. %(hostname)s - a hostname
 msgctxt "connect-container"
 msgid "%(city)s (%(hostname)s)"
-msgstr ""
-
-msgctxt "connect-view"
-msgid "Always require VPN"
 msgstr ""
 
 msgctxt "connect-view"
@@ -396,11 +422,11 @@ msgid "You have no more VPN time left on this account."
 msgstr ""
 
 msgctxt "connect-view"
-msgid "You need to disable \"Always require VPN\" in order to access the Internet to add time."
+msgid "You need to disable \"Lockdown mode\" in order to access the Internet to add time."
 msgstr ""
 
 msgctxt "connect-view"
-msgid "You're all set!"
+msgid "You’re all set!"
 msgstr ""
 
 #. The hostname line displayed below the country on the main screen
@@ -428,11 +454,11 @@ msgid "Out"
 msgstr ""
 
 #. Text displayed above button which logs out another device.
-#. The text enclosed in "**" will appear bold.
+#. The text enclosed in "<b></b>" will appear bold.
 #. Available placeholders:
 #. %(deviceName)s - The name of the device to log out.
 msgctxt "device-management"
-msgid "Are you sure you want to log out of **%(deviceName)s**?"
+msgid "Are you sure you want to log <b>%(deviceName)s</b> out?"
 msgstr ""
 
 #. Button for continuing login process.
@@ -545,7 +571,7 @@ msgid "Rented only"
 msgstr ""
 
 msgctxt "in-app-notifications"
-msgid "\"Always require VPN\" is enabled."
+msgid "\"%(lockdownModeSettingName)s\" is enabled."
 msgstr ""
 
 msgctxt "in-app-notifications"
@@ -581,6 +607,10 @@ msgctxt "in-app-notifications"
 msgid "Please quit and restart the app."
 msgstr ""
 
+msgctxt "in-app-notifications"
+msgid "Send problem report"
+msgstr ""
+
 #. The in-app banner displayed to the user when the app beta update is
 #. available.
 #. Available placeholders:
@@ -597,58 +627,20 @@ msgctxt "in-app-notifications"
 msgid "UPDATE AVAILABLE"
 msgstr ""
 
-msgctxt "interface-settings-view"
-msgid "Enable or disable system notifications. The critical notifications will always be displayed."
-msgstr ""
-
-msgctxt "interface-settings-view"
-msgid "Enable to move the app around as a free-standing window."
-msgstr ""
-
-#. Title label in navigation bar
-msgctxt "interface-settings-view"
-msgid "Interface settings"
-msgstr ""
-
-#. Navigation button to the 'Language' settings view
-msgctxt "interface-settings-view"
-msgid "Language"
-msgstr ""
-
-msgctxt "interface-settings-view"
-msgid "Monochromatic tray icon"
-msgstr ""
-
-msgctxt "interface-settings-view"
-msgid "Notifications"
-msgstr ""
-
-msgctxt "interface-settings-view"
-msgid "Show only the tray icon when the app starts."
-msgstr ""
-
-msgctxt "interface-settings-view"
-msgid "Start minimized"
-msgstr ""
-
-msgctxt "interface-settings-view"
-msgid "Unpin app from taskbar"
-msgstr ""
-
-msgctxt "interface-settings-view"
-msgid "Use a monochromatic tray icon instead of a colored one."
+msgctxt "launch-view"
+msgid "Connecting to Mullvad system service..."
 msgstr ""
 
 msgctxt "launch-view"
-msgid "Connecting to Mullvad system service..."
+msgid "Permission for the Mullvad VPN service has been revoked. Please go to System Settings and allow Mullvad VPN under the “Allow in the Background” setting."
 msgstr ""
 
 #. This is a warning message shown when the app is blocking the users
 #. internet connection while logged out.
 #. Available placeholder:
-#. %(alwaysRequireVpnSettingsName)s - The translation of "Always require VPN"
+#. %(lockdownModeSettingName)s - The translation of "Lockdown mode"
 msgctxt "login-view"
-msgid "**%(alwaysRequireVpnSettingsName)s** is enabled. Disable it to unblock your connection."
+msgid "<b>%(lockdownModeSettingName)s</b> is enabled. Disable it to unblock your connection."
 msgstr ""
 
 msgctxt "login-view"
@@ -668,7 +660,7 @@ msgid "Creating account..."
 msgstr ""
 
 msgctxt "login-view"
-msgid "Don't have an account number?"
+msgid "Don’t have an account number?"
 msgstr ""
 
 msgctxt "login-view"
@@ -792,7 +784,11 @@ msgid "Disconnected and unsecure"
 msgstr ""
 
 msgctxt "notifications"
-msgid "No servers in your selected location match your settings."
+msgid "Lockdown mode active, connection blocked"
+msgstr ""
+
+msgctxt "notifications"
+msgid "No servers match your settings, try changing server or other settings."
 msgstr ""
 
 msgctxt "notifications"
@@ -808,7 +804,7 @@ msgid "Unable to apply firewall rules."
 msgstr ""
 
 msgctxt "notifications"
-msgid "Unable to apply firewall rules. Try disabling any third-party antivirus or security software."
+msgid "Unable to apply firewall rules. Try temporarily disabling any third-party antivirus or security software."
 msgstr ""
 
 msgctxt "notifications"
@@ -816,19 +812,19 @@ msgid "Unable to apply firewall rules. Try updating your kernel."
 msgstr ""
 
 msgctxt "notifications"
-msgid "Unable to block all network traffic. Please troubleshoot or contact support."
+msgid "Unable to block all network traffic. Please troubleshoot or send a problem report."
 msgstr ""
 
 msgctxt "notifications"
-msgid "Unable to block all network traffic. Try disabling any third-party antivirus or security software or contact support."
+msgid "Unable to block all network traffic. Try temporarily disabling any third-party antivirus or security software or send a problem report."
 msgstr ""
 
 msgctxt "notifications"
-msgid "Unable to block all network traffic. Try updating your kernel or contact support."
+msgid "Unable to block all network traffic. Try updating your kernel or send a problem report."
 msgstr ""
 
 msgctxt "notifications"
-msgid "Unable to communicate with Mullvad kernel driver. Try reconnecting or contact support."
+msgid "Unable to communicate with Mullvad kernel driver. Try reconnecting or send a problem report."
 msgstr ""
 
 msgctxt "notifications"
@@ -836,11 +832,11 @@ msgid "Unable to resolve host of custom tunnel. Try changing your settings."
 msgstr ""
 
 msgctxt "notifications"
-msgid "Unable to set system DNS server. Please contact support."
+msgid "Unable to set system DNS server. Please send a problem report."
 msgstr ""
 
 msgctxt "notifications"
-msgid "Unable to start tunnel connection. Please contact support."
+msgid "Unable to start tunnel connection. Please send a problem report."
 msgstr ""
 
 msgctxt "notifications"
@@ -858,7 +854,7 @@ msgid "Valid %(wireguard)s key is missing. Manage keys under Advanced settings."
 msgstr ""
 
 msgctxt "notifications"
-msgid "Your device is offline. Try connecting when it's back online."
+msgid "Your device is offline. The tunnel will automatically connect once your device is back online."
 msgstr ""
 
 #. The in-app banner and system notification which are displayed to the user when the running app becomes unsupported.
@@ -918,7 +914,7 @@ msgstr ""
 #. %(automat)s - the translation of "Automatic"
 #. %(openvpn)s - will be replaced with OpenVPN
 msgctxt "openvpn-settings-view"
-msgid "To activate Bridge mode, change **%(transportProtocol)s** to **%(automatic)s** or **%(tcp)s**."
+msgid "To activate Bridge mode, change <b>%(transportProtocol)s</b> to <b>%(automatic)s</b> or <b>%(tcp)s</b>."
 msgstr ""
 
 #. This is used to instruct users how to make the bridge mode setting
@@ -927,13 +923,13 @@ msgstr ""
 #. %(tunnelProtocol)s - the name of the tunnel protocol setting
 #. %(openvpn)s - will be replaced with OpenVPN
 msgctxt "openvpn-settings-view"
-msgid "To activate Bridge mode, go back and change **%(tunnelProtocol)s** to **%(openvpn)s**."
+msgid "To activate Bridge mode, go back and change <b>%(tunnelProtocol)s</b> to <b>%(openvpn)s</b>."
 msgstr ""
 
 #. This is used to instruct users how to make UDP mode
 #. available.
 msgctxt "openvpn-settings-view"
-msgid "To activate UDP, change **Bridge mode** to **Automatic** or **Off**."
+msgid "To activate UDP, change <b>Bridge mode</b> to <b>Automatic</b> or <b>Off</b>."
 msgstr ""
 
 msgctxt "openvpn-settings-view"
@@ -1011,11 +1007,6 @@ msgctxt "select-location-view"
 msgid "Providers: %(numberOfProviders)d"
 msgstr ""
 
-#. Heading in select location view
-msgctxt "select-location-view"
-msgid "Select location"
-msgstr ""
-
 msgctxt "select-location-view"
 msgid "The app selects a random bridge server, but servers have a higher probability the closer they are to you."
 msgstr ""
@@ -1041,17 +1032,8 @@ msgctxt "settings-view"
 msgid "App version"
 msgstr ""
 
-#. Navigation button to the 'Interface settings' view
-msgctxt "settings-view"
-msgid "Interface settings"
-msgstr ""
-
 msgctxt "settings-view"
 msgid "OUT OF TIME"
-msgstr ""
-
-msgctxt "settings-view"
-msgid "Quit app"
 msgstr ""
 
 #. Navigation button to the 'Split tunneling' view
@@ -1065,6 +1047,11 @@ msgstr ""
 
 msgctxt "settings-view"
 msgid "Update available. Install the latest app version to stay up to date."
+msgstr ""
+
+#. Navigation button to the 'User interface settings' view
+msgctxt "settings-view"
+msgid "User interface settings"
 msgstr ""
 
 #. Navigation button to the 'VPN settings' view
@@ -1097,10 +1084,6 @@ msgid "Excluded apps"
 msgstr ""
 
 msgctxt "split-tunneling-view"
-msgid "Filter..."
-msgstr ""
-
-msgctxt "split-tunneling-view"
 msgid "Find another app"
 msgstr ""
 
@@ -1112,25 +1095,17 @@ msgctxt "split-tunneling-view"
 msgid "Launch"
 msgstr ""
 
-msgctxt "split-tunneling-view"
-msgid "No result for **%(searchTerm)s**."
-msgstr ""
-
 #. This error message is shown if the user tries to launch a Linux desktop
 #. entry file that doesn't contain the required 'Exec' value.
 msgctxt "split-tunneling-view"
-msgid "Please contact support."
+msgid "Please send a problem report."
 msgstr ""
 
 #. This error message is shown if the user tries to launch an app that
 #. doesn't exist.
 #. This error message is shown if an application failes during startup.
 msgctxt "split-tunneling-view"
-msgid "Please try again or contact support."
-msgstr ""
-
-msgctxt "split-tunneling-view"
-msgid "Try a different search."
+msgid "Please try again or send a problem report."
 msgstr ""
 
 #. Error message showed in a dialog when an application failes to launch.
@@ -1214,7 +1189,7 @@ msgid "This option is unavailable while using a beta version."
 msgstr ""
 
 msgctxt "support-view"
-msgid "To help you more effectively, your app's log file will be attached to this message. Your data will remain secure and private, as it is anonymised before being sent over an encrypted channel."
+msgid "To help you more effectively, your app’s log file will be attached to this message. Your data will remain secure and private, as it is anonymised before being sent over an encrypted channel."
 msgstr ""
 
 msgctxt "support-view"
@@ -1265,12 +1240,94 @@ msgctxt "tray-icon-tooltip"
 msgid "Connecting. %(location)s"
 msgstr ""
 
+msgctxt "troubleshoot"
+msgid "If these steps do not work please send a problem report."
+msgstr ""
+
+msgctxt "troubleshoot"
+msgid "Make sure you have NF tables support."
+msgstr ""
+
+msgctxt "troubleshoot"
+msgid "This can happen because the kernel is old, or if you have removed a kernel."
+msgstr ""
+
+msgctxt "troubleshoot"
+msgid "This error can happen when something other than Mullvad is actively updating the DNS."
+msgstr ""
+
+msgctxt "troubleshoot"
+msgid "Try reconnecting."
+msgstr ""
+
+msgctxt "troubleshoot"
+msgid "Try restarting your device."
+msgstr ""
+
+msgctxt "troubleshoot"
+msgid "Try to turn Wi-Fi Calling off in the FaceTime app settings and restart the Mac."
+msgstr ""
+
+msgctxt "troubleshoot"
+msgid "Unable to communicate with Mullvad kernel driver."
+msgstr ""
+
+msgctxt "troubleshoot"
+msgid "Uninstall or disable other DNS, networking and ads/website blocking apps."
+msgstr ""
+
+msgctxt "troubleshoot"
+msgid "Update your kernel."
+msgstr ""
+
 msgctxt "tunnel-control"
 msgid "Secure my connection"
 msgstr ""
 
 msgctxt "tunnel-control"
 msgid "Switch location"
+msgstr ""
+
+msgctxt "user-interface-settings-view"
+msgid "Enable or disable system notifications. The critical notifications will always be displayed."
+msgstr ""
+
+msgctxt "user-interface-settings-view"
+msgid "Enable to move the app around as a free-standing window."
+msgstr ""
+
+#. Navigation button to the 'Language' settings view
+msgctxt "user-interface-settings-view"
+msgid "Language"
+msgstr ""
+
+msgctxt "user-interface-settings-view"
+msgid "Monochromatic tray icon"
+msgstr ""
+
+msgctxt "user-interface-settings-view"
+msgid "Notifications"
+msgstr ""
+
+msgctxt "user-interface-settings-view"
+msgid "Show only the tray icon when the app starts."
+msgstr ""
+
+msgctxt "user-interface-settings-view"
+msgid "Start minimized"
+msgstr ""
+
+msgctxt "user-interface-settings-view"
+msgid "Unpin app from taskbar"
+msgstr ""
+
+msgctxt "user-interface-settings-view"
+msgid "Use a monochromatic tray icon instead of a colored one."
+msgstr ""
+
+#. Title label in navigation bar
+msgctxt "user-interface-settings-view"
+msgid "User interface settings"
 msgstr ""
 
 #. %(openvpn)s will be replaced with the string "OpenVPN"
@@ -1291,6 +1348,16 @@ msgctxt "vpn-settings-view"
 msgid "Add anyway"
 msgstr ""
 
+#. Label for settings that enables ad blocking.
+msgctxt "vpn-settings-view"
+msgid "Ads"
+msgstr ""
+
+#. Label for settings that enables block of adult content.
+msgctxt "vpn-settings-view"
+msgid "Adult content"
+msgstr ""
+
 msgctxt "vpn-settings-view"
 msgid "Allows access to other devices on the same network for sharing, printing etc."
 msgstr ""
@@ -1307,42 +1374,24 @@ msgctxt "vpn-settings-view"
 msgid "Automatically connect to a server when the app launches."
 msgstr ""
 
-msgctxt "vpn-settings-view"
-msgid "Block ads"
-msgstr ""
-
-msgctxt "vpn-settings-view"
-msgid "Block adult content"
-msgstr ""
-
-msgctxt "vpn-settings-view"
-msgid "Block gambling"
-msgstr ""
-
-msgctxt "vpn-settings-view"
-msgid "Block malware"
-msgstr ""
-
-msgctxt "vpn-settings-view"
-msgid "Block trackers"
-msgstr ""
-
 #. This is displayed when the custom DNS setting is turned on which makes the block
-#. ads/trackers settings disabled. The text enclosed in "**" will appear bold.
-#. Advanced settings refer to the name of the page with the title "Advanced".
+#. ads/trackers settings disabled. The text enclosed in "<b></b>" will appear bold.
 #. Available placeholders:
 #. %(customDnsFeatureName)s - The name displayed next to the custom DNS toggle.
 msgctxt "vpn-settings-view"
-msgid "Disable **%(customDnsFeatureName)s** (under Advanced settings) to activate these settings."
+msgid "Disable <b>%(customDnsFeatureName)s</b> below to activate these settings."
 msgstr ""
 
 #. This is displayed when either or both of the block ads/trackers settings are
-#. turned on which makes the custom DNS setting disabled. The text enclosed in "**"
-#. will appear bold.
+#. turned on which makes the custom DNS setting disabled.
 #. Available placeholders:
 #. %(preferencesPageName)s - The page title showed on top in the preferences page.
 msgctxt "vpn-settings-view"
-msgid "Disable all content blockers to activate this setting."
+msgid "Disable all <b>DNS content blockers</b> above to activate this setting."
+msgstr ""
+
+msgctxt "vpn-settings-view"
+msgid "DNS content blockers"
 msgstr ""
 
 msgctxt "vpn-settings-view"
@@ -1366,6 +1415,11 @@ msgctxt "vpn-settings-view"
 msgid "Enter IP"
 msgstr ""
 
+#. Label for settings that enables block of gamling related websites.
+msgctxt "vpn-settings-view"
+msgid "Gambling"
+msgstr ""
+
 #. Description for multihop settings toggle.
 #. Available placeholders:
 #. %(wireguard)s - Will be replaced with the string "WireGuard"
@@ -1387,6 +1441,11 @@ msgstr ""
 
 msgctxt "vpn-settings-view"
 msgid "Lockdown mode"
+msgstr ""
+
+#. Label for settings that enables malware blocking.
+msgctxt "vpn-settings-view"
+msgid "Malware"
 msgstr ""
 
 msgctxt "vpn-settings-view"
@@ -1417,6 +1476,15 @@ msgid "This built-in feature prevents your traffic from leaking outside of the V
 msgstr ""
 
 msgctxt "vpn-settings-view"
+msgid "This might cause issues on certain websites, services, and programs."
+msgstr ""
+
+#. Label for settings that enables tracker blocking.
+msgctxt "vpn-settings-view"
+msgid "Trackers"
+msgstr ""
+
+msgctxt "vpn-settings-view"
 msgid "Tunnel protocol"
 msgstr ""
 
@@ -1430,31 +1498,11 @@ msgid "VPN settings"
 msgstr ""
 
 msgctxt "vpn-settings-view"
-msgid "Warning: This is not an anti-virus and should not be treated as such, this is just an extra layer of protection."
+msgid "Warning: The malware blocker is not an anti-virus and should not be treated as such, this is just an extra layer of protection."
 msgstr ""
 
 msgctxt "vpn-settings-view"
-msgid "Warning: This might cause issues on certain websites, services, and programs."
-msgstr ""
-
-msgctxt "vpn-settings-view"
-msgid "When enabled, this feature stops the device from contacting certain domains known to host malware."
-msgstr ""
-
-msgctxt "vpn-settings-view"
-msgid "When enabled, this feature stops the device from contacting certain domains known to track users."
-msgstr ""
-
-msgctxt "vpn-settings-view"
-msgid "When enabled, this feature stops the device from contacting certain known ad domains."
-msgstr ""
-
-msgctxt "vpn-settings-view"
-msgid "When enabled, this feature stops the device from contacting certain websites and services known to host adult content."
-msgstr ""
-
-msgctxt "vpn-settings-view"
-msgid "When enabled, this feature stops the device from contacting certain websites and services known to host gambling content."
+msgid "When this feature is enabled it stops the device from contacting certain domains or websites known for distributing ads, malware, trackers and more."
 msgstr ""
 
 msgctxt "vpn-settings-view"
@@ -1479,6 +1527,10 @@ msgid "IP version"
 msgstr ""
 
 msgctxt "wireguard-settings-view"
+msgid "It does this by performing an extra key exchange using a quantum safe algorithm and mixing the result into WireGuard’s regular encryption. This extra step uses approximately 500 kiB of traffic every time a new tunnel is established."
+msgstr ""
+
+msgctxt "wireguard-settings-view"
 msgid "MTU"
 msgstr ""
 
@@ -1498,6 +1550,13 @@ msgctxt "wireguard-settings-view"
 msgid "Port"
 msgstr ""
 
+#. The title for the WireGuard quantum resistance selector. This setting
+#. makes the cryptography resistant to the future abilities of quantum
+#. computers.
+msgctxt "wireguard-settings-view"
+msgid "Quantum-resistant tunnel"
+msgstr ""
+
 #. The hint displayed below the WireGuard MTU input field.
 #. Available placeholders:
 #. %(wireguard)s - Will be replaced with the string "WireGuard"
@@ -1507,9 +1566,12 @@ msgctxt "wireguard-settings-view"
 msgid "Set %(wireguard)s MTU value. Valid range: %(min)d - %(max)d."
 msgstr ""
 
-#. The hint displayed below the WireGuard port selector.
 msgctxt "wireguard-settings-view"
-msgid "The automatic setting will randomly choose from a wide range of ports."
+msgid "The automatic setting will randomly choose from the valid port ranges shown below."
+msgstr ""
+
+msgctxt "wireguard-settings-view"
+msgid "The custom port can be any value inside the valid ranges: %(portRanges)s."
 msgstr ""
 
 #. The hint displayed below the WireGuard IP version selector.
@@ -1517,6 +1579,10 @@ msgstr ""
 #. %(wireguard)s - Will be replaced with the string "WireGuard"
 msgctxt "wireguard-settings-view"
 msgid "This allows access to %(wireguard)s for devices that only support IPv6."
+msgstr ""
+
+msgctxt "wireguard-settings-view"
+msgid "This feature makes the WireGuard tunnel resistant to potential attacks from quantum computers."
 msgstr ""
 
 msgctxt "wireguard-settings-view"
@@ -1545,16 +1611,16 @@ msgstr ""
 msgid "All applications"
 msgstr ""
 
-msgid "Are you sure you want to log out of <b>%s</b>?"
+msgid "Always-on VPN assigned to other app"
+msgstr ""
+
+msgid "Always-on VPN might be enabled for another app"
 msgstr ""
 
 msgid "Blocking all connections"
 msgstr ""
 
 msgid "Copied Mullvad account number to clipboard"
-msgstr ""
-
-msgid "Copied WireGuard public key to clipboard"
 msgstr ""
 
 msgid "Copied to clipboard"
@@ -1584,9 +1650,6 @@ msgstr ""
 msgid "Failed to fetch list of devices"
 msgstr ""
 
-msgid "Failed to generate a key"
-msgstr ""
-
 msgid "Failed to resolve the hostname of custom server"
 msgstr ""
 
@@ -1596,31 +1659,10 @@ msgstr ""
 msgid "Failed to start tunnel connection"
 msgstr ""
 
-msgid "Generate key"
-msgstr ""
-
 msgid "Going to login will unblock the internet on this device."
 msgstr ""
 
-msgid "If needed we will contact you on %s"
-msgstr ""
-
 msgid "Install Mullvad VPN (%s) to stay up to date"
-msgstr ""
-
-msgid "Key generated"
-msgstr ""
-
-msgid "Key is invalid"
-msgstr ""
-
-msgid "Key is valid"
-msgstr ""
-
-msgid "Key verification failed"
-msgstr ""
-
-msgid "Manage keys"
 msgstr ""
 
 msgid "Mullvad account number"
@@ -1635,13 +1677,7 @@ msgstr ""
 msgid "Preferences"
 msgstr ""
 
-msgid "Public key"
-msgstr ""
-
-msgid "Reconnecting with new WireGuard key..."
-msgstr ""
-
-msgid "Regenerate key"
+msgid "Privacy policy"
 msgstr ""
 
 msgid "Secured"
@@ -1671,13 +1707,16 @@ msgstr ""
 msgid "Toggle VPN"
 msgstr ""
 
-msgid "Too many WireGuard keys registered to account"
+msgid "Unable to start tunnel connection. Please disable Always-on VPN for <b>%s</b> before using Mullvad VPN."
 msgstr ""
 
 msgid "Unsecured"
 msgstr ""
 
 msgid "Update available, download to remain safe."
+msgstr ""
+
+msgid "VPN permission error"
 msgstr ""
 
 msgid "VPN permission was denied when creating the tunnel. Please try connecting again."
@@ -1689,28 +1728,13 @@ msgstr ""
 msgid "Valid WireGuard key is missing. Manage keys under Advanced settings."
 msgstr ""
 
-msgid "Verify key"
-msgstr ""
-
 msgid "Virtual adapter error"
 msgstr ""
 
 msgid "While connected, your real location is masked with a private and secure location in the selected region."
 msgstr ""
 
-msgid "WireGuard"
-msgstr ""
-
 msgid "WireGuard MTU"
-msgstr ""
-
-msgid "WireGuard error"
-msgstr ""
-
-msgid "WireGuard key"
-msgstr ""
-
-msgid "WireGuard public key"
 msgstr ""
 
 msgid "YOU MIGHT BE LEAKING NETWORK TRAFFIC"
@@ -1720,12 +1744,6 @@ msgid "You are running an unsupported app version."
 msgstr ""
 
 msgid "You are running an unsupported app version. Please upgrade to %s now to ensure your security"
-msgstr ""
-
-msgid "You have too many active devices. Please log out of at least one by removing it from the list below. You can find the corresponding nickname under the device's Account settings."
-msgstr ""
-
-msgid "You may need to go back to the app's main screen and click Disconnect before trying again. Don't worry, the information you entered will remain in the form."
 msgstr ""
 
 msgid "Account credit expires in a day"

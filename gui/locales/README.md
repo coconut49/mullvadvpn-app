@@ -76,6 +76,14 @@ When the translations are done, download it by running:
 CROWDIN_API_KEY=$YOUR_CROWDIN_KEY `./scripts/localization download`
 ```
 
+## Verify translation formatting
+
+Use the localization script to verify that the strings are valid HTML and that they contain the
+correct amount of format specifiers:
+```
+./scripts/localization verify
+```
+
 ## Keeping messages.pot in sync
 
 This is only relevant when running the different tools for updating `messages.pot` manually, and
@@ -86,3 +94,13 @@ from getting out of sync with the strings in the source code, always run both
 `npm run update-translations` and the `translations-converter` tool in that order. If the first one
 is run on it's own it will remove the strings specific to Android. The easiest way to accomplish
 this is to just run `./scripts/localization prepare` as described above.
+
+## Do Not Translate
+
+All user facing phrases and terms should be translated except for the following trademarks and
+names of technologies:
+* Mullvad VPN
+* WireGuard
+* OpenVPN
+* Split Tunneling
+* System Transparency

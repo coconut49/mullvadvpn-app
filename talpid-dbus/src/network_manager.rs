@@ -144,7 +144,7 @@ impl NetworkManager {
 
     pub fn get_interface_name(&self, tunnel: &WireguardTunnel) -> Result<String> {
         tunnel
-            .device_proxy(&*self.connection)
+            .device_proxy(&self.connection)
             .get(NM_DEVICE, "Interface")
             .map_err(Error::Dbus)
     }
@@ -334,7 +334,7 @@ impl NetworkManager {
             .map_err(Error::Dbus);
 
         let config_result: Result<()> = tunnel
-            .config_proxy(&*self.connection)
+            .config_proxy(&self.connection)
             .method_call(NM_SETTINGS_CONNECTION_INTERFACE, "Delete", ())
             .map_err(Error::Dbus);
         deactivation_result?;
@@ -393,6 +393,12 @@ impl NetworkManager {
         }
     }
 
+    pub fn ensure_can_be_used_to_manage_dns(&self) -> Result<()> {
+        self.ensure_resolv_conf_is_managed()?;
+        self.ensure_network_manager_exists()?;
+        self.nm_version_dns_works()?;
+        Ok(())
+    }
     pub fn ensure_resolv_conf_is_managed(&self) -> Result<()> {
         // check if NM is set to manage resolv.conf
         let management_mode: String = self
@@ -430,11 +436,11 @@ impl NetworkManager {
         Ok(())
     }
 
-    fn as_manager<'a>(&'a self) -> Proxy<'a, &SyncConnection> {
+    fn as_manager(&'_ self) -> Proxy<'_, &SyncConnection> {
         Proxy::new(NM_BUS, NM_MANAGER_PATH, RPC_TIMEOUT, &*self.connection)
     }
 
-    fn as_dns_manager<'a>(&'a self) -> Proxy<'a, &SyncConnection> {
+    fn as_dns_manager(&'_ self) -> Proxy<'_, &SyncConnection> {
         Proxy::new(NM_BUS, NM_DNS_MANAGER_PATH, RPC_TIMEOUT, &*self.connection)
     }
 

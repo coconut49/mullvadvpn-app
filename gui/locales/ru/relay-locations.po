@@ -10,7 +10,7 @@ msgstr ""
 "Project-Id-Version: mullvad-app\n"
 "Language-Team: Russian\n"
 "Language: ru_RU\n"
-"PO-Revision-Date: 2022-07-12 06:30\n"
+"PO-Revision-Date: 2023-02-06 12:43\n"
 
 #. AU ADL
 msgid "Adelaide"
@@ -59,6 +59,10 @@ msgstr "Белград"
 #. US BOS
 msgid "Boston, MA"
 msgstr "Бостон, MA"
+
+#. SK BTS
+msgid "Bratislava"
+msgstr "Братислава"
 
 #. BR
 msgid "Brazil"
@@ -111,6 +115,10 @@ msgstr "Кливленд, OH"
 #. DK CPH
 msgid "Copenhagen"
 msgstr "Копенгаген"
+
+#. HR
+msgid "Croatia"
+msgstr "Хорватия"
 
 #. CZ
 msgid "Czech Republic"
@@ -183,6 +191,10 @@ msgstr "Гонконг"
 #. US HNL
 msgid "Honolulu, HI"
 msgstr "Гонолулу, HI"
+
+#. US HOU
+msgid "Houston, TX"
+msgstr "Хьюстон, Техас"
 
 #. HU
 msgid "Hungary"
@@ -380,6 +392,10 @@ msgstr "Рига"
 msgid "Romania"
 msgstr "Румыния"
 
+#. IT ROM
+msgid "Rome"
+msgstr "Рим"
+
 #. US SLC
 msgid "Salt Lake City, UT"
 msgstr "Солт-Лейк-Сити, UT"
@@ -420,6 +436,10 @@ msgstr "Су-Фолс, SD"
 msgid "Skopje"
 msgstr "Скопье"
 
+#. SK
+msgid "Slovakia"
+msgstr "Словакия"
+
 #. BG SOF
 msgid "Sofia"
 msgstr "София"
@@ -439,6 +459,10 @@ msgstr "Сент-Луис, MO"
 #. US XLX
 msgid "Stamford, CT"
 msgstr "Стамфорд, CT"
+
+#. NO SVG
+msgid "Stavanger"
+msgstr "Ставангер"
 
 #. SE STO
 msgid "Stockholm"
@@ -511,6 +535,10 @@ msgstr "Вашингтон, округ Колумбия"
 #. AT VIE
 msgid "Wien"
 msgstr "Вена"
+
+#. HR ZAG
+msgid "Zagreb"
+msgstr "Загреб"
 
 #. CH ZRH
 msgid "Zurich"

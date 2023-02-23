@@ -11,7 +11,7 @@ import Foundation
 extension Result {
     var value: Success? {
         switch self {
-        case .success(let value):
+        case let .success(value):
             return value
         case .failure:
             return nil
@@ -22,8 +22,19 @@ extension Result {
         switch self {
         case .success:
             return nil
-        case .failure(let error):
+        case let .failure(error):
             return error
+        }
+    }
+}
+
+extension Result {
+    func flattenValue<T>() -> T? where Success == T? {
+        switch self {
+        case let .success(optional):
+            return optional.flatMap { $0 }
+        case .failure:
+            return nil
         }
     }
 }

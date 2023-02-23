@@ -6,16 +6,25 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.channels.actor
-import kotlinx.coroutines.channels.sendBlocking
+import kotlinx.coroutines.channels.trySendBlocking
 import net.mullvad.mullvadvpn.ipc.Request
+import net.mullvad.mullvadvpn.model.CustomDnsOptions
+import net.mullvad.mullvadvpn.model.DefaultDnsOptions
 import net.mullvad.mullvadvpn.model.DnsOptions
+import net.mullvad.mullvadvpn.model.DnsState
 
 class CustomDns(private val endpoint: ServiceEndpoint) {
     private sealed class Command {
+        @Deprecated("Use SetDnsOptions")
         class AddDnsServer(val server: InetAddress) : Command()
+        @Deprecated("Use SetDnsOptions")
         class RemoveDnsServer(val server: InetAddress) : Command()
+        @Deprecated("Use SetDnsOptions")
         class ReplaceDnsServer(val oldServer: InetAddress, val newServer: InetAddress) : Command()
+        @Deprecated("Use SetDnsOptions")
         class SetEnabled(val enabled: Boolean) : Command()
+
+        class SetDnsOptions(val dnsOptions: DnsOptions) : Command()
     }
 
     private val commandChannel = spawnActor()
@@ -29,29 +38,33 @@ class CustomDns(private val endpoint: ServiceEndpoint) {
     init {
         endpoint.settingsListener.dnsOptionsNotifier.subscribe(this) { maybeDnsOptions ->
             maybeDnsOptions?.let { dnsOptions ->
-                enabled = dnsOptions.custom
+                enabled = dnsOptions.state == DnsState.Custom
                 dnsServers.clear()
-                dnsServers.addAll(dnsOptions.addresses)
+                dnsServers.addAll(dnsOptions.customOptions.addresses)
             }
         }
 
         endpoint.dispatcher.apply {
             registerHandler(Request.AddCustomDnsServer::class) { request ->
-                commandChannel.sendBlocking(Command.AddDnsServer(request.address))
+                commandChannel.trySendBlocking(Command.AddDnsServer(request.address))
             }
 
             registerHandler(Request.RemoveCustomDnsServer::class) { request ->
-                commandChannel.sendBlocking(Command.RemoveDnsServer(request.address))
+                commandChannel.trySendBlocking(Command.RemoveDnsServer(request.address))
             }
 
             registerHandler(Request.ReplaceCustomDnsServer::class) { request ->
-                commandChannel.sendBlocking(
+                commandChannel.trySendBlocking(
                     Command.ReplaceDnsServer(request.oldAddress, request.newAddress)
                 )
             }
 
             registerHandler(Request.SetEnableCustomDns::class) { request ->
-                commandChannel.sendBlocking(Command.SetEnabled(request.enable))
+                commandChannel.trySendBlocking(Command.SetEnabled(request.enable))
+            }
+
+            registerHandler(Request.SetDnsOptions::class) { request ->
+                commandChannel.trySendBlocking(Command.SetDnsOptions(request.dnsOptions))
             }
         }
     }
@@ -73,6 +86,7 @@ class CustomDns(private val endpoint: ServiceEndpoint) {
                         doReplaceDnsServer(command.oldServer, command.newServer)
                     }
                     is Command.SetEnabled -> changeDnsOptions(command.enabled)
+                    is Command.SetDnsOptions -> setDnsOptions(command.dnsOptions)
                 }
             }
         } catch (exception: ClosedReceiveChannelException) {
@@ -106,8 +120,15 @@ class CustomDns(private val endpoint: ServiceEndpoint) {
     }
 
     private suspend fun changeDnsOptions(enable: Boolean) {
-        val options = DnsOptions(enable, dnsServers)
-
+        val options = DnsOptions(
+            state = if (enable) DnsState.Custom else DnsState.Default,
+            customOptions = CustomDnsOptions(dnsServers),
+            defaultOptions = DefaultDnsOptions()
+        )
         daemon.await().setDnsOptions(options)
+    }
+
+    private suspend fun setDnsOptions(dnsOptions: DnsOptions) {
+        daemon.await().setDnsOptions(dnsOptions)
     }
 }

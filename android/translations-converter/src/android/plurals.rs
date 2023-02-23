@@ -18,6 +18,7 @@ pub struct PluralResources {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PluralResource {
     /// The plural resource ID.
+    #[serde(rename = "@name")]
     pub name: String,
 
     /// The items of the plural resource, one for each quantity variant.
@@ -31,6 +32,7 @@ pub struct PluralResource {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PluralVariant {
     /// The quantity for this variant to be used.
+    #[serde(rename = "@quantity")]
     pub quantity: PluralQuantity,
 
     /// The string value
@@ -104,7 +106,7 @@ impl Display for PluralResources {
         writeln!(formatter, "<resources>")?;
 
         for entry in &self.entries {
-            write!(formatter, "{}", entry)?;
+            write!(formatter, "{entry}")?;
         }
 
         writeln!(formatter, "</resources>")
@@ -116,7 +118,7 @@ impl Display for PluralResource {
         writeln!(formatter, r#"    <plurals name="{}">"#, self.name)?;
 
         for item in &self.items {
-            writeln!(formatter, "        {}", item)?;
+            writeln!(formatter, "        {item}")?;
         }
 
         writeln!(formatter, "    </plurals>")
@@ -143,6 +145,6 @@ impl Display for PluralQuantity {
             PluralQuantity::Other => "other",
         };
 
-        write!(formatter, "{}", quantity)
+        write!(formatter, "{quantity}")
     }
 }

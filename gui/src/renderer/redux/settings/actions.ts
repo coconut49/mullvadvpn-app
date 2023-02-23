@@ -1,5 +1,10 @@
 import { IWindowsApplication } from '../../../shared/application-types';
-import { BridgeState, IDnsOptions, ObfuscationSettings } from '../../../shared/daemon-rpc-types';
+import {
+  BridgeState,
+  IDnsOptions,
+  IWireguardEndpointData,
+  ObfuscationSettings,
+} from '../../../shared/daemon-rpc-types';
 import { IGuiSettingsState } from '../../../shared/gui-settings-state';
 import { BridgeSettingsRedux, IRelayLocationRedux, RelaySettingsRedux } from './reducers';
 
@@ -18,9 +23,9 @@ export interface IUpdateRelayLocationsAction {
   relayLocations: IRelayLocationRedux[];
 }
 
-export interface IUpdateBridgeLocationsAction {
-  type: 'UPDATE_BRIDGE_LOCATIONS';
-  bridgeLocations: IRelayLocationRedux[];
+export interface IUpdateWireguardEndpointData {
+  type: 'UPDATE_WIREGUARD_ENDPOINT_DATA';
+  wireguardEndpointData: IWireguardEndpointData;
 }
 
 export interface IUpdateAllowLanAction {
@@ -63,6 +68,11 @@ export interface IUpdateWireguardMtuAction {
   mtu?: number;
 }
 
+export interface IUpdateWireguardQuantumResistantAction {
+  type: 'UPDATE_WIREGUARD_QUANTUM_RESISTANT';
+  quantumResistant?: boolean;
+}
+
 export interface IUpdateAutoStartAction {
   type: 'UPDATE_AUTO_START';
   autoStart: boolean;
@@ -92,7 +102,7 @@ export type SettingsAction =
   | IUpdateGuiSettingsAction
   | IUpdateRelayAction
   | IUpdateRelayLocationsAction
-  | IUpdateBridgeLocationsAction
+  | IUpdateWireguardEndpointData
   | IUpdateAllowLanAction
   | IUpdateEnableIpv6Action
   | IUpdateBlockWhenDisconnectedAction
@@ -101,6 +111,7 @@ export type SettingsAction =
   | IUpdateBridgeStateAction
   | IUpdateOpenVpnMssfixAction
   | IUpdateWireguardMtuAction
+  | IUpdateWireguardQuantumResistantAction
   | IUpdateAutoStartAction
   | IUpdateDnsOptionsAction
   | IUpdateSplitTunnelingStateAction
@@ -128,12 +139,12 @@ function updateRelayLocations(relayLocations: IRelayLocationRedux[]): IUpdateRel
   };
 }
 
-function updateBridgeLocations(
-  bridgeLocations: IRelayLocationRedux[],
-): IUpdateBridgeLocationsAction {
+function updateWireguardEndpointData(
+  wireguardEndpointData: IWireguardEndpointData,
+): IUpdateWireguardEndpointData {
   return {
-    type: 'UPDATE_BRIDGE_LOCATIONS',
-    bridgeLocations,
+    type: 'UPDATE_WIREGUARD_ENDPOINT_DATA',
+    wireguardEndpointData,
   };
 }
 
@@ -195,6 +206,15 @@ function updateWireguardMtu(mtu?: number): IUpdateWireguardMtuAction {
   };
 }
 
+function updateWireguardQuantumResistant(
+  quantumResistant?: boolean,
+): IUpdateWireguardQuantumResistantAction {
+  return {
+    type: 'UPDATE_WIREGUARD_QUANTUM_RESISTANT',
+    quantumResistant,
+  };
+}
+
 function updateAutoStart(autoStart: boolean): IUpdateAutoStartAction {
   return {
     type: 'UPDATE_AUTO_START',
@@ -238,7 +258,7 @@ export default {
   updateGuiSettings,
   updateRelay,
   updateRelayLocations,
-  updateBridgeLocations,
+  updateWireguardEndpointData,
   updateAllowLan,
   updateEnableIpv6,
   updateBlockWhenDisconnected,
@@ -247,6 +267,7 @@ export default {
   updateBridgeState,
   updateOpenVpnMssfix,
   updateWireguardMtu,
+  updateWireguardQuantumResistant,
   updateAutoStart,
   updateDnsOptions,
   updateSplitTunnelingState,

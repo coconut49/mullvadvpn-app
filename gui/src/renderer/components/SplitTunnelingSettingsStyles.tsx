@@ -3,9 +3,10 @@ import styled from 'styled-components';
 import { colors } from '../../config.json';
 import * as AppButton from './AppButton';
 import * as Cell from './cell';
-import { normalText } from './common-styles';
+import { measurements, normalText } from './common-styles';
 import ImageView from './ImageView';
 import { NavigationScrollbars } from './NavigationBar';
+import SearchBar from './SearchBar';
 import { HeaderTitle } from './SettingsHeader';
 
 export const StyledPageCover = styled.div({}, (props: { show: boolean }) => ({
@@ -69,90 +70,32 @@ export const StyledSpinnerRow = styled(Cell.CellButton)({
   alignItems: 'center',
   justifyContent: 'center',
   padding: '8px 0',
-  marginBottom: '20px',
+  marginBottom: measurements.rowVerticalMargin,
   background: colors.blue40,
 });
 
 export const StyledListContainer = styled.div({
   display: 'flex',
   flexDirection: 'column',
-  marginBottom: '20px',
+  marginBottom: measurements.rowVerticalMargin,
 });
 
 export const StyledBrowseButton = styled(AppButton.BlueButton)({
-  margin: '0 22px 22px',
+  margin: `0 ${measurements.viewMargin} ${measurements.viewMargin}`,
 });
 
 export const StyledCellContainer = styled(Cell.Container)({
-  marginBottom: '20px',
+  marginBottom: measurements.rowVerticalMargin,
 });
 
-export const StyledSearchContainer = styled.div({
-  position: 'relative',
-  marginBottom: '18px',
-});
-
-export const StyledSearchInput = styled.input.attrs({ type: 'text' })({
-  ...normalText,
-  width: 'calc(100% - 22px * 2)',
-  border: 'none',
-  borderRadius: '4px',
-  padding: '9px 38px',
-  margin: '0 22px',
-  color: colors.white60,
-  backgroundColor: colors.white10,
-  '::placeholder': {
-    color: colors.white60,
-  },
-  ':focus': {
-    color: colors.blue,
-    backgroundColor: colors.white,
-    '::placeholder': {
-      color: colors.blue40,
-    },
-  },
-});
-
-export const StyledClearButton = styled.button({
-  position: 'absolute',
-  top: '50%',
-  transform: 'translateY(-50%)',
-  right: '28px',
-  border: 'none',
-  background: 'none',
-  padding: 0,
-});
-
-export const StyledSearchIcon = styled(ImageView)({
-  position: 'absolute',
-  top: '50%',
-  transform: 'translateY(-50%)',
-  left: '28px',
-  [`${StyledSearchInput}:focus ~ &`]: {
-    backgroundColor: colors.blue,
-  },
-});
-
-export const StyledClearIcon = styled(ImageView)({
-  ':hover': {
-    backgroundColor: colors.white60,
-  },
-  [`${StyledSearchInput}:focus ~ ${StyledClearButton} &`]: {
-    backgroundColor: colors.blue40,
-    ':hover': {
-      backgroundColor: colors.blue,
-    },
-  },
-});
-
-export const StyledNoResult = styled(Cell.Footer)({
+export const StyledNoResult = styled(Cell.CellFooter)({
   display: 'flex',
   flexDirection: 'column',
   paddingTop: 0,
   marginTop: 0,
 });
 
-export const StyledNoResultText = styled(Cell.FooterText)({
+export const StyledNoResultText = styled(Cell.CellFooterText)({
   textAlign: 'center',
 });
 
@@ -163,4 +106,10 @@ export const StyledHeaderTitleContainer = styled.div({
 
 export const StyledHeaderTitle = styled(HeaderTitle)({
   flex: 1,
+});
+
+export const StyledSearchBar = styled(SearchBar)({
+  marginLeft: measurements.viewMargin,
+  marginRight: measurements.viewMargin,
+  marginBottom: measurements.buttonVerticalMargin,
 });

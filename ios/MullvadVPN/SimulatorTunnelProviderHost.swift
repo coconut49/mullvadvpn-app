@@ -9,16 +9,34 @@
 #if targetEnvironment(simulator)
 
 import Foundation
+import MullvadLogging
+import MullvadREST
+import MullvadTypes
 import enum NetworkExtension.NEProviderStopReason
-import Logging
+import RelayCache
+import RelaySelector
+import TunnelProviderMessaging
 
-class SimulatorTunnelProviderHost: SimulatorTunnelProviderDelegate {
+final class SimulatorTunnelProviderHost: SimulatorTunnelProviderDelegate {
     private var selectorResult: RelaySelectorResult?
+    private let urlRequestProxy: URLRequestProxy
+    private let relayCacheTracker: RelayCacheTracker
 
     private let providerLogger = Logger(label: "SimulatorTunnelProviderHost")
     private let dispatchQueue = DispatchQueue(label: "SimulatorTunnelProviderHostQueue")
 
-    override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+    init(relayCacheTracker: RelayCacheTracker) {
+        self.relayCacheTracker = relayCacheTracker
+        self.urlRequestProxy = URLRequestProxy(
+            urlSession: REST.makeURLSession(),
+            dispatchQueue: dispatchQueue
+        )
+    }
+
+    override func startTunnel(
+        options: [String: NSObject]?,
+        completionHandler: @escaping (Error?) -> Void
+    ) {
         dispatchQueue.async {
             var selectorResult: RelaySelectorResult?
 
@@ -28,11 +46,11 @@ class SimulatorTunnelProviderHost: SimulatorTunnelProviderDelegate {
                 selectorResult = try tunnelOptions.getSelectorResult()
             } catch {
                 self.providerLogger.error(
-                    chainedError: AnyChainedError(error),
+                    error: error,
                     message: """
-                             Failed to decode relay selector result passed from the app. \
-                             Will continue by picking new relay.
-                             """
+                    Failed to decode relay selector result passed from the app. \
+                    Will continue by picking new relay.
+                    """
                 )
             }
 
@@ -42,7 +60,7 @@ class SimulatorTunnelProviderHost: SimulatorTunnelProviderDelegate {
                 completionHandler(nil)
             } catch {
                 self.providerLogger.error(
-                    chainedError: AnyChainedError(error),
+                    error: error,
                     message: "Failed to pick relay."
                 )
                 completionHandler(error)
@@ -50,7 +68,10 @@ class SimulatorTunnelProviderHost: SimulatorTunnelProviderDelegate {
         }
     }
 
-    override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+    override func stopTunnel(
+        with reason: NEProviderStopReason,
+        completionHandler: @escaping () -> Void
+    ) {
         dispatchQueue.async {
             self.selectorResult = nil
 
@@ -61,13 +82,13 @@ class SimulatorTunnelProviderHost: SimulatorTunnelProviderDelegate {
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         dispatchQueue.async {
             do {
-                let response = try self.processMessage(messageData)
+                let message = try TunnelProviderMessage(messageData: messageData)
 
-                completionHandler?(response)
+                self.handleProviderMessage(message, completionHandler: completionHandler)
             } catch {
                 self.providerLogger.error(
-                    chainedError: AnyChainedError(error),
-                    message: "Failed to handle app message."
+                    error: error,
+                    message: "Failed to decode app message."
                 )
 
                 completionHandler?(nil)
@@ -75,29 +96,58 @@ class SimulatorTunnelProviderHost: SimulatorTunnelProviderDelegate {
         }
     }
 
-    private func processMessage(_ messageData: Data) throws -> Data? {
-        let message = try TunnelProviderMessage(messageData: messageData)
-
+    private func handleProviderMessage(
+        _ message: TunnelProviderMessage,
+        completionHandler: ((Data?) -> Void)?
+    ) {
         switch message {
         case .getTunnelStatus:
             var tunnelStatus = PacketTunnelStatus()
             tunnelStatus.tunnelRelay = self.selectorResult?.packetTunnelRelay
 
-            return try TunnelProviderReply(tunnelStatus).encode()
+            var reply: Data?
+            do {
+                reply = try TunnelProviderReply(tunnelStatus).encode()
+            } catch {
+                self.providerLogger.error(
+                    error: error,
+                    message: "Failed to encode tunnel status."
+                )
+            }
 
-        case .reconnectTunnel(let aSelectorResult):
+            completionHandler?(reply)
+
+        case let .reconnectTunnel(aSelectorResult):
             reasserting = true
             if let aSelectorResult = aSelectorResult {
                 selectorResult = aSelectorResult
             }
             reasserting = false
+            completionHandler?(nil)
 
-            return nil
+        case let .sendURLRequest(proxyRequest):
+            urlRequestProxy.sendRequest(proxyRequest) { response in
+                var reply: Data?
+                do {
+                    reply = try TunnelProviderReply(response).encode()
+                } catch {
+                    self.providerLogger.error(
+                        error: error,
+                        message: "Failed to encode ProxyURLResponse."
+                    )
+                }
+                completionHandler?(reply)
+            }
+
+        case let .cancelURLRequest(id):
+            urlRequestProxy.cancelRequest(identifier: id)
+
+            completionHandler?(nil)
         }
     }
 
     private func pickRelay() throws -> RelaySelectorResult {
-        let cachedRelays = try RelayCache.Tracker.shared.getCachedRelays()
+        let cachedRelays = try relayCacheTracker.getCachedRelays()
         let tunnelSettings = try SettingsManager.readSettings()
 
         return try RelaySelector.evaluate(
@@ -105,7 +155,6 @@ class SimulatorTunnelProviderHost: SimulatorTunnelProviderDelegate {
             constraints: tunnelSettings.relayConstraints
         )
     }
-
 }
 
 #endif

@@ -183,10 +183,7 @@ xcrun altool --store-password-in-keychain-item <KEYCHAIN_ITEM_NAME> \
 Copy template files of Xcode build configuration:
 
 ```
-cp ./ios/Configurations/Base.xcconfig.template ./ios/Configurations/Base.xcconfig
-cp ./ios/Configurations/App.xcconfig.template ./ios/Configurations/App.xcconfig
-cp ./ios/Configurations/PacketTunnel.xcconfig.template ./ios/Configurations/PacketTunnel.xcconfig
-cp ./ios/Configurations/Screenshots.xcconfig.template ./ios/Configurations/Screenshots.xcconfig
+for file in ./ios/Configurations/*.template ; do cp $file ${file//.template/} ; done
 ```
 
 Template files provide our team ID and correct provisioning profiles and generally do not require 
@@ -204,11 +201,8 @@ you do not intend to generate screenshots for the app.
 
 # Automated build and deployment
 
-Build script does not bump the build number, so make sure to do that manually and commit to repo:
-
-```
-agvtool bump
-```
+Build script does not bump the build number, so make sure to edit `Configurations/Version.xcconfig` 
+and commit it back to repo.
 
 1. Run `./ios/build.sh` to build and export the app for upload to AppStore.
 1. Run `./ios/build.sh --deploy` - same as above but also uploads the app to AppStore and 
@@ -234,5 +228,5 @@ Reference: https://docs.travis-ci.com/user/common-build-problems/#mac-macos-sier
 The iOS app utilizes SSL pinning. Root certificates can be updated by using the source certificates shipped along with `mullvad-api`:
 
 ```
-openssl x509 -in ../mullvad-api/le_root_cert.pem -outform der -out Assets/le_root_cert.cer
+openssl x509 -in ../mullvad-api/le_root_cert.pem -outform der -out MullvadREST/Assets/le_root_cert.cer
 ```

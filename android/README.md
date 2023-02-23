@@ -1,36 +1,42 @@
 # Mullvad VPN Android app
 
-This directory contains the files specific to the Android app.
+This directory contains the Android project as well as related files and information. Apart from the
+content of this directory, the Android project also relies on building [wireguard-go](../wireguard/)
+and the [mullvad-daemon](../mullvad-daemon/) which are both bundled as shared libraries into the
+assembled APK.
 
-## Translations / Localization
+The app is available for download on
+[our website](https://mullvad.net/download/android/),
+[GitHub Releases](https://github.com/mullvad/mullvadvpn-app/releases),
+[F-Droid](https://f-droid.org/packages/net.mullvad.mullvadvpn/) and
+[Google Play](https://play.google.com/store/apps/details?id=net.mullvad.mullvadvpn).
 
-### How to update translations
+## Quick start
 
-See [/gui/locales/README.md][gui-locales-readme] for how to easily update translations.
+### Browsing the source code
 
-### Detailed structure and script documentation
+The content in this directory (`<repository-root>/android`) follows a standard Android project
+structure and can therefore be opened in Android Studio or any other IDE or editor of your choice.
 
-The app has localized messages stored in `src/main/res/values-<locale>/` directories, where
-`<locale>` is a two letter locale and can be followed by a two letter region code. For example: `en`
-or `en-rGB`.
+### Building the app
 
-The translated strings are based on the gettext translation files used for the desktop app. A helper
-tool is available to create the translated string resource files based on the gettext translations,
-in the `translations-converter` directory. The tool can be executed with the following commands
-(assuming Rust and Cargo are installed, if not, follow the steps in the [root README][root-readme]):
-
+The easiest and recommended way to build the Android project including the `mullvad-daemon` and
+`wireguard-go` is to use the following command (which requires `podman`):
 ```
-cd translations-converter
-cargo run
+../building/containerized-build.sh android --dev-build
 ```
+See the [build instructions](BuildInstructions.md) for further information.
 
-After the tool finishes executing, it creates the appropriate localized message files and
-directories for each locale it can find in the [`gui/locales` directory][gui-locales]. It will also
-update the [messages.pot] template file with the string messages from the Android app for which it
-did not find any translation, making it simpler to use the template for obtaining those
-translations.
+## Translations and localization
 
-[root-readme]: ../README.md
+See the [locale README][gui-locales-readme] for how to easily update translations. It also includes
+documentation for which phrases and terms shouldn't be translated (Do Not Translate). Also see the
+[translations converter README](translations-converter-readme) for documentation about
+the tool used to sync translations between the Android and Desktop apps.
+
 [gui-locales-readme]: ../gui/locales/README.md
-[gui-locales]: ../gui/locales/
-[messages.pot]: ../gui/locales/messages.pot
+[translations-converter-readme]: ./translations-converter/README.md
+
+## Icons and assets
+
+For a general overview of icons and graphics read [the graphics readme](../graphics/README.md).

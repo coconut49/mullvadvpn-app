@@ -70,7 +70,8 @@ function build_windows {
 function unix_target_triple {
     local platform="$(uname -s)"
     if [[ ("${platform}" == "Linux") ]]; then
-        echo "x86_64-unknown-linux-gnu"
+        local arch="$(uname -m)"
+        echo "${arch}-unknown-linux-gnu"
     elif [[ ("${platform}" == "Darwin") ]]; then
         local arch="$(uname -m)"
         if [[ ("${arch}" == "arm64") ]]; then
@@ -87,16 +88,26 @@ function unix_target_triple {
 function build_unix {
     echo "Building wireguard-go for $1"
 
-    # Flags for cross compiling for M1 macs
-    if [[ "$(unix_target_triple)" != "$1" && "$1" == "aarch64-apple-darwin" ]]; then
-        export CGO_ENABLED=1
-        export GOOS=darwin
-        export GOARCH=arm64
-        export CC="$(xcrun -sdk $SDKROOT --find clang) -arch $GOARCH -isysroot $SDKROOT"
-        export CFLAGS="-isysroot $SDKROOT -arch $GOARCH -I$SDKROOT/usr/include"
-        export LD_LIBRARY_PATH="$SDKROOT/usr/lib"
-        export CGO_CFLAGS="-isysroot $SDKROOT -arch $GOARCH"
-        export CGO_LDFLAGS="-isysroot $SDKROOT -arch $GOARCH"
+    # Flags for cross compiling
+    if [[ "$(unix_target_triple)" != "$1" ]]; then
+        # Linux arm
+        if [[ "$1" == "aarch64-unknown-linux-gnu" ]]; then
+            export CGO_ENABLED=1
+            export GOARCH=arm64
+            export CC=aarch64-linux-gnu-gcc
+        fi
+
+        # Apple silicon
+        if [[ "$1" == "aarch64-apple-darwin" ]]; then
+            export CGO_ENABLED=1
+            export GOOS=darwin
+            export GOARCH=arm64
+            export CC="$(xcrun -sdk $SDKROOT --find clang) -arch $GOARCH -isysroot $SDKROOT"
+            export CFLAGS="-isysroot $SDKROOT -arch $GOARCH -I$SDKROOT/usr/include"
+            export LD_LIBRARY_PATH="$SDKROOT/usr/lib"
+            export CGO_CFLAGS="-isysroot $SDKROOT -arch $GOARCH"
+            export CGO_LDFLAGS="-isysroot $SDKROOT -arch $GOARCH"
+        fi
     fi
 
     pushd libwg
@@ -109,7 +120,7 @@ function build_unix {
 
 function build_android {
     echo "Building for android"
-    local docker_image_hash="5e3ad65f2d344a891343633a7f545b56fd4cbc0a9776b921ce245773150cf781"
+    local docker_image_hash="afa84a78b428163b4585d04259fad801df2ebf5ab079f53b3a90892afd18dd9f"
 
     if is_docker_build $@; then
         docker run --rm \

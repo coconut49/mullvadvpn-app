@@ -10,7 +10,6 @@ import Foundation
 import UIKit
 
 class SelectLocationNavigationController: UINavigationController {
-
     override var childForStatusBarStyle: UIViewController? {
         return topViewController
     }
@@ -23,12 +22,6 @@ class SelectLocationNavigationController: UINavigationController {
         super.init(navigationBarClass: CustomNavigationBar.self, toolbarClass: nil)
 
         viewControllers = [contentController]
-    }
-
-    override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
-        // This initializer exists to prevent crash on iOS 12.
-        // See: https://stackoverflow.com/a/38335090/351305
-        super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
     }
 
     required init?(coder aDecoder: NSCoder) {

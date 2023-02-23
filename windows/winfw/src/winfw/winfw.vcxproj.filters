@@ -31,9 +31,6 @@
     <ClCompile Include="rules\baseline\permitndp.cpp">
       <Filter>rules\baseline</Filter>
     </ClCompile>
-    <ClCompile Include="rules\baseline\permitping.cpp">
-      <Filter>rules\baseline</Filter>
-    </ClCompile>
     <ClCompile Include="rules\baseline\permitvpntunnel.cpp">
       <Filter>rules\baseline</Filter>
     </ClCompile>
@@ -63,6 +60,9 @@
     </ClCompile>
     <ClCompile Include="rules\multi\permitvpnrelay.cpp">
       <Filter>rules\multi</Filter>
+    </ClCompile>
+    <ClCompile Include="rules\dns\permitloopback.cpp">
+      <Filter>rules\dns</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -102,9 +102,6 @@
     <ClInclude Include="rules\baseline\permitndp.h">
       <Filter>rules\baseline</Filter>
     </ClInclude>
-    <ClInclude Include="rules\baseline\permitping.h">
-      <Filter>rules\baseline</Filter>
-    </ClInclude>
     <ClInclude Include="rules\baseline\permitvpntunnel.h">
       <Filter>rules\baseline</Filter>
     </ClInclude>
@@ -137,6 +134,9 @@
     </ClInclude>
     <ClInclude Include="rules\multi\permitvpnrelay.h">
       <Filter>rules\multi</Filter>
+    </ClInclude>
+    <ClInclude Include="rules\dns\permitloopback.h">
+      <Filter>rules\dns</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

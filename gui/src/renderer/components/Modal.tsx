@@ -4,7 +4,9 @@ import styled from 'styled-components';
 
 import { colors } from '../../config.json';
 import log from '../../shared/logging';
-import { tinyText } from './common-styles';
+import { useWillExit } from '../lib/will-exit';
+import * as AppButton from './AppButton';
+import { measurements, tinyText } from './common-styles';
 import CustomScrollbars from './CustomScrollbars';
 import ImageView from './ImageView';
 import { BackAction } from './KeyboardNavigation';
@@ -20,6 +22,7 @@ const ModalContent = styled.div({
   left: 0,
   right: 0,
   bottom: 0,
+  overflow: 'hidden',
 });
 
 const ModalBackground = styled.div({}, (props: { visible: boolean }) => ({
@@ -33,7 +36,7 @@ const ModalBackground = styled.div({}, (props: { visible: boolean }) => ({
   left: 0,
   right: 0,
   bottom: 0,
-  transition: 'all 150ms ease-out',
+  transition: 'background-color 150ms ease-out',
   pointerEvents: props.visible ? 'auto' : 'none',
   zIndex: 2,
 }));
@@ -105,7 +108,7 @@ const ModalAlertContainer = styled.div({
   flexDirection: 'column',
   flex: 1,
   justifyContent: 'center',
-  padding: '26px 14px 14px',
+  padding: '14px',
 });
 
 const StyledModalAlert = styled.div({}, (props: { visible: boolean; closing: boolean }) => {
@@ -140,10 +143,13 @@ const ModalAlertIcon = styled.div({
   marginTop: '8px',
 });
 
+const ModalAlertButtonGroupContainer = styled.div({
+  marginTop: measurements.buttonVerticalMargin,
+});
+
 const ModalAlertButtonContainer = styled.div({
   display: 'flex',
   flexDirection: 'column',
-  marginTop: '18px',
   marginRight: '16px',
 });
 
@@ -156,19 +162,34 @@ interface IModalAlertProps {
   close?: () => void;
 }
 
+interface OpenState {
+  isClosing: boolean;
+  wasOpen: boolean;
+}
+
 export function ModalAlert(props: IModalAlertProps & { isOpen: boolean }) {
   const { isOpen, ...otherProps } = props;
   const activeModalContext = useContext(ActiveModalContext);
-  const [closing, setClosing] = useState(false);
-  const prevIsOpen = useRef(isOpen);
+  const [openState, setOpenState] = useState<OpenState>({ isClosing: false, wasOpen: isOpen });
 
-  const onTransitionEnd = useCallback(() => setClosing(false), []);
+  const willExit = useWillExit();
+
+  // Modal shouldn't prepare for being opened again while view is disappearing.
+  const onTransitionEnd = useCallback(() => {
+    if (!willExit) {
+      setOpenState({ isClosing: false, wasOpen: isOpen });
+    }
+  }, [willExit, isOpen]);
+
   useEffect(() => {
-    setClosing((closing) => closing || (prevIsOpen.current && !isOpen));
-    prevIsOpen.current = isOpen;
+    setOpenState(({ isClosing, wasOpen }) => ({
+      isClosing: isClosing || (wasOpen && !isOpen),
+      // Unmounting the Modal during view transitions result in a visual glitch.
+      wasOpen: willExit ? wasOpen : isOpen,
+    }));
   }, [isOpen]);
 
-  if (!prevIsOpen.current && !isOpen && !closing) {
+  if (!openState.wasOpen && !isOpen && !openState.isClosing) {
     return null;
   }
 
@@ -176,7 +197,7 @@ export function ModalAlert(props: IModalAlertProps & { isOpen: boolean }) {
     <ModalAlertImpl
       {...activeModalContext}
       {...otherProps}
-      closing={closing}
+      closing={openState.isClosing}
       onTransitionEnd={onTransitionEnd}
     />
   );
@@ -251,9 +272,13 @@ class ModalAlertImpl extends React.Component<IModalAlertImplProps, IModalAlertSt
                 {this.props.children}
               </StyledCustomScrollbars>
 
-              {this.props.buttons.map((button, index) => (
-                <ModalAlertButtonContainer key={index}>{button}</ModalAlertButtonContainer>
-              ))}
+              <ModalAlertButtonGroupContainer>
+                <AppButton.ButtonGroup>
+                  {this.props.buttons.map((button, index) => (
+                    <ModalAlertButtonContainer key={index}>{button}</ModalAlertButtonContainer>
+                  ))}
+                </AppButton.ButtonGroup>
+              </ModalAlertButtonGroupContainer>
             </StyledModalAlert>
           </ModalAlertContainer>
         </ModalBackground>

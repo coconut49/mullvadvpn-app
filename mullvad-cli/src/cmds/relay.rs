@@ -93,7 +93,7 @@ impl Command for Relay {
                                         .help("Transport protocol")
                                         .long("protocol")
                                         .default_value("udp")
-                                        .possible_values(&["udp", "tcp"]),
+                                        .possible_values(["udp", "tcp"]),
                                 )
                             )
                     )
@@ -130,7 +130,7 @@ impl Command for Relay {
                             .arg(
                                 clap::Arg::new("ownership")
                                 .help("Ownership preference, or 'any' for no preference.")
-                                .possible_values(&["any", "owned", "rented"])
+                                .possible_values(["any", "owned", "rented"])
                                 .required(true)
                             )
                     )
@@ -152,7 +152,7 @@ impl Command for Relay {
                                         clap::Arg::new("transport protocol")
                                             .help("Transport protocol")
                                             .long("protocol")
-                                            .possible_values(&["any", "udp", "tcp"])
+                                            .possible_values(["any", "udp", "tcp"])
                                             .takes_value(true),
                                     )
                             )
@@ -169,7 +169,7 @@ impl Command for Relay {
                                     .arg(
                                         clap::Arg::new("ip version")
                                             .long("ipv")
-                                            .possible_values(&["any", "4", "6"])
+                                            .possible_values(["any", "4", "6"])
                                             .takes_value(true),
                                     )
                                     .arg(
@@ -189,7 +189,7 @@ impl Command for Relay {
                                     clap::Arg::new("tunnel protocol")
                                     .required(true)
                                     .index(1)
-                                    .possible_values(&["any", "wireguard", "openvpn", ]),
+                                    .possible_values(["any", "wireguard", "openvpn", ]),
                                     )
                                 ),
             )
@@ -350,7 +350,7 @@ impl Relay {
 
     fn validate_wireguard_key(key_str: &str) -> [u8; 32] {
         let key_bytes = base64::decode(key_str.trim()).unwrap_or_else(|e| {
-            eprintln!("Failed to decode wireguard key: {}", e);
+            eprintln!("Failed to decode wireguard key: {e}");
             std::process::exit(1);
         });
 
@@ -593,7 +593,7 @@ impl Relay {
             wireguard_constraints.entry_location = parse_entry_location_constraint(entry);
             let use_multihop = wireguard_constraints.entry_location.is_some();
             if use_multihop {
-                let use_pq_safe_psk = rpc
+                let quantum_resistant = rpc
                     .get_settings(())
                     .await?
                     .into_inner()
@@ -601,8 +601,12 @@ impl Relay {
                     .unwrap()
                     .wireguard
                     .unwrap()
-                    .use_pq_safe_psk;
-                if use_pq_safe_psk {
+                    .quantum_resistant;
+                if quantum_resistant
+                    == Some(types::QuantumResistantState {
+                        state: i32::from(types::quantum_resistant_state::State::On),
+                    })
+                {
                     return Err(Error::CommandFailed(
                         "Quantum resistant tunnels do not work when multihop is enabled",
                     ));

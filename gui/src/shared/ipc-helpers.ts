@@ -5,12 +5,12 @@ import { capitalize } from './string-helpers';
 
 type Handler<T, R> = (callback: (arg: T) => R) => void;
 type Sender<T, R> = (arg: T) => R;
-type Notifier<T> = (webContents: WebContents | undefined, arg: T) => void;
+type Notifier<T> = ((arg: T) => void) | undefined;
 type Listener<T> = (callback: (arg: T) => void) => void;
 
 interface MainToRenderer<T> {
   direction: 'main-to-renderer';
-  send: (event: string, ipcMain: EIpcMain) => Notifier<T>;
+  send: (event: string, webContents: WebContents) => Notifier<T>;
   receive: (event: string, ipcRenderer: EIpcRenderer) => Listener<T>;
 }
 
@@ -23,7 +23,7 @@ interface RendererToMain<T, R> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyIpcCall = MainToRenderer<any> | RendererToMain<any, any>;
 
-type Schema = Record<string, Record<string, AnyIpcCall>>;
+export type Schema = Record<string, Record<string, AnyIpcCall>>;
 
 // Renames all IPC calls, e.g. `callName` to either `notifyCallName` or `handleCallName` depending
 // on direction.
@@ -48,29 +48,36 @@ type IpcRendererFn<I extends AnyIpcCall> = I['direction'] extends 'main-to-rende
   : ReturnType<I['send']>;
 
 // Transforms the provided schema to the correct type for the main event channel.
-type IpcMain<S extends Schema> = {
+export type IpcMain<S extends Schema> = {
   [G in keyof S]: {
     [K in keyof S[G] as IpcMainKey<string & K, S[G][K]>]: IpcMainFn<S[G][K]>;
   };
 };
 
 // Transforms the provided schema to the correct type for the renderer event channel.
-type IpcRenderer<S extends Schema> = {
+export type IpcRenderer<S extends Schema> = {
   [G in keyof S]: {
     [K in keyof S[G] as IpcRendererKey<string & K, S[G][K]>]: IpcRendererFn<S[G][K]>;
   };
 };
 
 // Preforms the transformation of the main event channel in accordance with the above types.
-export function createIpcMain<S extends Schema>(schema: S, ipcMain: EIpcMain): IpcMain<S> {
+export function createIpcMain<S extends Schema>(
+  schema: S,
+  ipcMain: EIpcMain,
+  webContents: WebContents | undefined,
+): IpcMain<S> {
   return createIpc(schema, (event, key, spec) => {
     const capitalizedKey = capitalize(key);
     const newKey =
       spec.direction === 'main-to-renderer' ? `notify${capitalizedKey}` : `handle${capitalizedKey}`;
-    const newValue =
-      spec.direction === 'main-to-renderer'
-        ? spec.send(event, ipcMain)
-        : spec.receive(event, ipcMain);
+
+    let newValue;
+    if (spec.direction === 'main-to-renderer') {
+      newValue = webContents ? spec.send(event, webContents) : undefined;
+    } else {
+      newValue = spec.receive(event, ipcMain);
+    }
 
     return [newKey, newValue];
   });
@@ -152,9 +159,9 @@ export function notifyRenderer<T>(): MainToRenderer<T> {
   };
 }
 
-function notifyRendererImpl<T>(event: string, _ipcMain: EIpcMain): Notifier<T> {
-  return (webContents, value) => {
-    if (webContents === undefined) {
+function notifyRendererImpl<T>(event: string, webContents: WebContents): Notifier<T> {
+  return (value) => {
+    if (webContents === undefined || webContents.isDestroyed() || webContents.isCrashed()) {
       log.error(`sender(${event}): webContents is already destroyed!`);
     } else {
       webContents.send(event, value);

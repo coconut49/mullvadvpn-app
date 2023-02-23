@@ -1,13 +1,10 @@
-import React, { useCallback, useContext, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 
 import { colors } from '../../config.json';
 import { messages } from '../../shared/gettext';
 import { useAppContext } from '../context';
-import useActions from '../lib/actionsHook';
 import { useHistory } from '../lib/history';
 import { useCombinedRefs } from '../lib/utilityHooks';
-import { useSelector } from '../redux/store';
-import userInterface from '../redux/userinterface/actions';
 import CustomScrollbars, { CustomScrollbarsRef, IScrollEvent } from './CustomScrollbars';
 import { BackActionContext } from './KeyboardNavigation';
 import {
@@ -45,8 +42,6 @@ export class NavigationContainer extends React.Component<
     showsBarSeparator: false,
   };
 
-  private scrollEventListeners: Array<(event: IScrollEvent) => void> = [];
-
   public componentDidMount() {
     this.updateBarAppearance({ scrollLeft: 0, scrollTop: 0 });
   }
@@ -64,27 +59,8 @@ export class NavigationContainer extends React.Component<
   }
 
   public onScroll = (event: IScrollEvent) => {
-    this.notifyScrollEventListeners(event);
     this.updateBarAppearance(event);
   };
-
-  public addScrollEventListener(fn: (event: IScrollEvent) => void) {
-    const index = this.scrollEventListeners.indexOf(fn);
-    if (index === -1) {
-      this.scrollEventListeners.push(fn);
-    }
-  }
-
-  public removeScrollEventListener(fn: (event: IScrollEvent) => void) {
-    const index = this.scrollEventListeners.indexOf(fn);
-    if (index !== -1) {
-      this.scrollEventListeners.splice(index, 1);
-    }
-  }
-
-  private notifyScrollEventListeners(event: IScrollEvent) {
-    this.scrollEventListeners.forEach((listener) => listener(event));
-  }
 
   private updateBarAppearance(event: IScrollEvent) {
     // that's where SettingsHeader.HeaderTitle intersects the navigation bar
@@ -103,7 +79,6 @@ export class NavigationContainer extends React.Component<
 }
 
 interface INavigationScrollbarsProps {
-  onScroll?: (value: IScrollEvent) => void;
   className?: string;
   fillContainer?: boolean;
   children?: React.ReactNode;
@@ -114,48 +89,41 @@ export const NavigationScrollbars = React.forwardRef(function NavigationScrollba
   forwardedRef?: React.Ref<CustomScrollbarsRef>,
 ) {
   const history = useHistory();
+  const { setNavigationHistory } = useAppContext();
   const { onScroll } = useContext(NavigationScrollContext);
-  const { setScrollPositions } = useAppContext();
 
   const ref = useRef<CustomScrollbarsRef>();
   const combinedRefs = useCombinedRefs(forwardedRef, ref);
 
-  const { addScrollPosition, removeScrollPosition } = useActions(userInterface);
-  const scrollPositions = useSelector((state) => state.userInterface.scrollPosition);
-
   useEffect(() => {
-    const path = history.location.pathname;
     const beforeunload = () => {
       if (ref.current) {
-        const scrollPosition = ref.current.getScrollPosition();
-        setScrollPositions({ ...scrollPositions, [path]: scrollPosition });
+        history.location.state.scrollPosition = ref.current.getScrollPosition();
+        setNavigationHistory(history.asObject);
       }
     };
 
     window.addEventListener('beforeunload', beforeunload);
 
     return () => window.removeEventListener('beforeunload', beforeunload);
-  }, [scrollPositions]);
+  }, []);
 
   useLayoutEffect(() => {
-    const path = history.location.pathname;
-
-    const scrollPosition = scrollPositions[history.location.pathname];
-    if (history.action === 'POP' && scrollPosition) {
-      ref.current?.scrollTo(...scrollPosition);
-      removeScrollPosition(path);
+    const location = history.location;
+    if (history.action === 'POP') {
+      ref.current?.scrollTo(...location.state.scrollPosition);
     }
 
     return () => {
       if (history.action === 'PUSH' && ref.current) {
-        addScrollPosition(path, ref.current.getScrollPosition());
+        location.state.scrollPosition = ref.current.getScrollPosition();
+        setNavigationHistory(history.asObject);
       }
     };
   }, []);
 
   const handleScroll = useCallback((event: IScrollEvent) => {
     onScroll(event);
-    props.onScroll?.(event);
   }, []);
 
   return (
@@ -180,10 +148,9 @@ interface INavigationBarProps {
 
 export const NavigationBar = function NavigationBarT(props: INavigationBarProps) {
   const { showsBarSeparator, showsBarTitle } = useContext(NavigationScrollContext);
-  const unpinnedWindow = useSelector((state) => state.settings.guiSettings.unpinnedWindow);
 
   return (
-    <StyledNavigationBar unpinnedWindow={unpinnedWindow}>
+    <StyledNavigationBar>
       <TitleBarItemContext.Provider
         value={{ visible: props.alwaysDisplayBarTitle || showsBarTitle }}>
         {props.children}
@@ -217,13 +184,14 @@ export const TitleBarItem = React.memo(function TitleBarItemT(props: ITitleBarIt
 });
 
 export function BackBarItem() {
+  const history = useHistory();
+  const backIcon = useMemo(() => history.length > 2, []);
   const { parentBackAction } = useContext(BackActionContext);
-  const iconSource = parentBackAction?.icon === 'back' ? 'icon-back' : 'icon-close-down';
-  const ariaLabel =
-    parentBackAction?.icon === 'back' ? messages.gettext('Back') : messages.gettext('Close');
+  const iconSource = backIcon ? 'icon-back' : 'icon-close-down';
+  const ariaLabel = backIcon ? messages.gettext('Back') : messages.gettext('Close');
 
   return (
-    <StyledBackBarItemButton aria-label={ariaLabel} onClick={parentBackAction?.action}>
+    <StyledBackBarItemButton aria-label={ariaLabel} onClick={parentBackAction}>
       <StyledBackBarItemIcon source={iconSource} tintColor={colors.white40} width={24} />
     </StyledBackBarItemButton>
   );

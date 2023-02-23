@@ -9,11 +9,14 @@ use mullvad_types::{
     account::{AccountToken, VoucherSubmission},
     version::AppVersion,
 };
+use once_cell::sync::OnceCell;
 use proxy::ApiConnectionMode;
 use std::{
+    cell::Cell,
     collections::BTreeMap,
     future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    ops::Deref,
     path::Path,
 };
 use talpid_types::ErrorExt;
@@ -62,15 +65,52 @@ pub const API_IP_CACHE_FILENAME: &str = "api-ip-address.txt";
 const ACCOUNTS_URL_PREFIX: &str = "accounts/v1";
 const APP_URL_PREFIX: &str = "app/v1";
 
-lazy_static::lazy_static! {
-    static ref API: ApiEndpoint = ApiEndpoint::get();
+pub static API: LazyManual<ApiEndpoint> = LazyManual::new(ApiEndpoint::from_env_vars);
+
+unsafe impl<T, F: Send> Sync for LazyManual<T, F> where OnceCell<T>: Sync {}
+
+/// A value that is either initialized on access or explicitly.
+pub struct LazyManual<T, F = fn() -> T> {
+    cell: OnceCell<T>,
+    lazy_fn: Cell<Option<F>>,
+}
+
+impl<T, F> LazyManual<T, F> {
+    const fn new(lazy_fn: F) -> Self {
+        Self {
+            cell: OnceCell::new(),
+            lazy_fn: Cell::new(Some(lazy_fn)),
+        }
+    }
+
+    /// Tries to initialize the object. An error is returned if it is
+    /// already initialized.
+    #[cfg(feature = "api-override")]
+    pub fn override_init(&self, val: T) -> Result<(), T> {
+        let _ = self.lazy_fn.take();
+        self.cell.set(val)
+    }
+}
+
+impl<T> Deref for LazyManual<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.cell.get_or_init(|| (self.lazy_fn.take().unwrap())())
+    }
 }
 
 /// A hostname and socketaddr to reach the Mullvad REST API over.
-struct ApiEndpoint {
-    host: String,
-    addr: SocketAddr,
-    disable_address_cache: bool,
+#[derive(Debug)]
+pub struct ApiEndpoint {
+    pub host: String,
+    pub addr: SocketAddr,
+    #[cfg(feature = "api-override")]
+    pub disable_address_cache: bool,
+    #[cfg(feature = "api-override")]
+    pub disable_tls: bool,
+    #[cfg(feature = "api-override")]
+    pub force_direct_connection: bool,
 }
 
 impl ApiEndpoint {
@@ -80,9 +120,9 @@ impl ApiEndpoint {
     ///
     /// Panics if `MULLVAD_API_ADDR` has invalid contents or if only one of
     /// `MULLVAD_API_ADDR` or `MULLVAD_API_HOST` has been set but not the other.
-    fn get() -> ApiEndpoint {
+    pub fn from_env_vars() -> ApiEndpoint {
         const API_HOST_DEFAULT: &str = "api.mullvad.net";
-        const API_IP_DEFAULT: IpAddr = IpAddr::V4(Ipv4Addr::new(45, 83, 222, 100));
+        const API_IP_DEFAULT: IpAddr = IpAddr::V4(Ipv4Addr::new(45, 83, 223, 196));
         const API_PORT_DEFAULT: u16 = 443;
 
         fn read_var(key: &'static str) -> Option<String> {
@@ -90,35 +130,66 @@ impl ApiEndpoint {
             match env::var(key) {
                 Ok(v) => Some(v),
                 Err(env::VarError::NotPresent) => None,
-                Err(env::VarError::NotUnicode(_)) => panic!("{} does not contain valid UTF-8", key),
+                Err(env::VarError::NotUnicode(_)) => panic!("{key} does not contain valid UTF-8"),
             }
         }
 
         let host_var = read_var("MULLVAD_API_HOST");
         let address_var = read_var("MULLVAD_API_ADDR");
+        let disable_tls_var = read_var("MULLVAD_API_DISABLE_TLS");
 
+        #[cfg_attr(not(feature = "api-override"), allow(unused_mut))]
         let mut api = ApiEndpoint {
             host: API_HOST_DEFAULT.to_owned(),
             addr: SocketAddr::new(API_IP_DEFAULT, API_PORT_DEFAULT),
+            #[cfg(feature = "api-override")]
             disable_address_cache: false,
+            #[cfg(feature = "api-override")]
+            disable_tls: false,
+            #[cfg(feature = "api-override")]
+            force_direct_connection: false,
         };
 
-        if cfg!(feature = "api-override") {
-            match (host_var, address_var) {
-                (None, None) => (),
-                (Some(_), None) => panic!("MULLVAD_API_HOST is set, but not MULLVAD_API_ADDR"),
-                (None, Some(_)) => panic!("MULLVAD_API_ADDR is set, but not MULLVAD_API_HOST"),
-                (Some(user_host), Some(user_addr)) => {
-                    api.host = user_host;
-                    api.addr = user_addr
-                        .parse()
-                        .expect("MULLVAD_API_ADDR is not a valid socketaddr");
-                    api.disable_address_cache = true;
-                    log::debug!("Overriding API. Using {} at {}", api.host, api.addr);
+        #[cfg(feature = "api-override")]
+        {
+            use std::net::ToSocketAddrs;
+
+            if host_var.is_none() && address_var.is_none() {
+                if disable_tls_var.is_some() {
+                    log::warn!("MULLVAD_API_DISABLE_TLS is ignored since MULLVAD_API_HOST and MULLVAD_API_ADDR are not set");
                 }
+                return api;
             }
-        } else if host_var.is_some() || address_var.is_some() {
-            log::warn!("MULLVAD_API_HOST and MULLVAD_API_ADDR are ignored in production builds");
+
+            let scheme = if let Some(disable_tls_var) = disable_tls_var {
+                api.disable_tls = disable_tls_var != "0";
+                "http://"
+            } else {
+                "https://"
+            };
+
+            if let Some(user_host) = host_var {
+                api.host = user_host;
+            }
+            if let Some(user_addr) = address_var {
+                api.addr = user_addr
+                    .parse()
+                    .expect("MULLVAD_API_ADDR is not a valid socketaddr");
+            } else {
+                log::warn!("Resolving API IP from MULLVAD_API_HOST");
+                api.addr = format!("{}:{}", api.host, API_PORT_DEFAULT)
+                    .to_socket_addrs()
+                    .expect("failed to resolve API host")
+                    .next()
+                    .expect("API host yielded 0 addresses");
+            }
+            api.disable_address_cache = true;
+            api.force_direct_connection = true;
+            log::debug!("Overriding API. Using {} at {scheme}{}", api.host, api.addr);
+        }
+        #[cfg(not(feature = "api-override"))]
+        if host_var.is_some() || address_var.is_some() || disable_tls_var.is_some() {
+            log::warn!("These variables are ignored in production builds: MULLVAD_API_HOST, MULLVAD_API_ADDR, MULLVAD_API_DISABLE_TLS");
         }
         api
     }
@@ -189,6 +260,7 @@ impl Runtime {
         #[cfg(target_os = "android")] socket_bypass_tx: Option<mpsc::Sender<SocketBypassRequest>>,
     ) -> Result<Self, Error> {
         let handle = tokio::runtime::Handle::current();
+        #[cfg(feature = "api-override")]
         if API.disable_address_cache {
             return Self::new_inner(
                 handle,
@@ -236,7 +308,7 @@ impl Runtime {
         new_address_callback: impl ApiEndpointUpdateCallback + Send + Sync + 'static,
         #[cfg(target_os = "android")] socket_bypass_tx: Option<mpsc::Sender<SocketBypassRequest>>,
     ) -> rest::RequestServiceHandle {
-        let service_handle = rest::RequestService::spawn(
+        rest::RequestService::spawn(
             sni_hostname,
             self.api_availability.handle(),
             self.address_cache.clone(),
@@ -245,8 +317,7 @@ impl Runtime {
             #[cfg(target_os = "android")]
             socket_bypass_tx,
         )
-        .await;
-        service_handle
+        .await
     }
 
     /// Returns a request factory initialized to create requests for the master API
@@ -323,7 +394,7 @@ impl AccountsProxy {
             let response = rest::send_request(
                 &factory,
                 service,
-                &format!("{}/accounts/me", ACCOUNTS_URL_PREFIX),
+                &format!("{ACCOUNTS_URL_PREFIX}/accounts/me"),
                 Method::GET,
                 Some((access_proxy, account)),
                 &[StatusCode::OK],
@@ -345,7 +416,7 @@ impl AccountsProxy {
         let response = rest::send_request(
             &self.handle.factory,
             service,
-            &format!("{}/accounts", ACCOUNTS_URL_PREFIX),
+            &format!("{ACCOUNTS_URL_PREFIX}/accounts"),
             Method::POST,
             None,
             &[StatusCode::CREATED],
@@ -376,7 +447,7 @@ impl AccountsProxy {
             let response = rest::send_json_request(
                 &factory,
                 service,
-                &format!("{}/submit-voucher", APP_URL_PREFIX),
+                &format!("{APP_URL_PREFIX}/submit-voucher"),
                 Method::POST,
                 &submission,
                 Some((access_proxy, account_token)),
@@ -404,7 +475,7 @@ impl AccountsProxy {
             let response = rest::send_request(
                 &factory,
                 service,
-                &format!("{}/www-auth-token", APP_URL_PREFIX),
+                &format!("{APP_URL_PREFIX}/www-auth-token"),
                 Method::POST,
                 Some((access_proxy, account)),
                 &[StatusCode::OK],
@@ -452,7 +523,7 @@ impl ProblemReportProxy {
         let request = rest::send_json_request(
             &self.handle.factory,
             service,
-            &format!("{}/problem-report", APP_URL_PREFIX),
+            &format!("{APP_URL_PREFIX}/problem-report"),
             Method::POST,
             &report,
             None,
@@ -477,6 +548,16 @@ pub struct AppVersionResponse {
     pub latest: AppVersion,
     pub latest_stable: Option<AppVersion>,
     pub latest_beta: AppVersion,
+    #[serde(default = "default_wg_threshold")]
+    pub x_threshold_wg_default: f32,
+}
+
+/// Temporary function that will be removed later. Used to generate default wg_threshold.
+/// In case there is no `x_threshold_wg_default` returned by the API result we interpret that to
+/// mean that the migration is done and WireGuard should be the default. In that case the threshold
+/// value should be 1.0
+fn default_wg_threshold() -> f32 {
+    1.0
 }
 
 impl AppVersionProxy {
@@ -492,7 +573,7 @@ impl AppVersionProxy {
     ) -> impl Future<Output = Result<AppVersionResponse, rest::Error>> {
         let service = self.handle.service.clone();
 
-        let path = format!("{}/releases/{}/{}", APP_URL_PREFIX, platform, app_version);
+        let path = format!("{APP_URL_PREFIX}/releases/{platform}/{app_version}");
         let request = self.handle.factory.request(&path, Method::GET);
 
         async move {
@@ -522,7 +603,7 @@ impl ApiProxy {
         let response = rest::send_request(
             &self.handle.factory,
             service,
-            &format!("{}/api-addrs", APP_URL_PREFIX),
+            &format!("{APP_URL_PREFIX}/api-addrs"),
             Method::GET,
             None,
             &[StatusCode::OK],

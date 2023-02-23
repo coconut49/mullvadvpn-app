@@ -10,8 +10,7 @@ import Foundation
 import UIKit
 
 class SettingsDNSTextCell: SettingsCell, UITextFieldDelegate {
-
-    var isValidInput: Bool = true {
+    var isValidInput = true {
         didSet {
             updateCellAppearance(animated: false)
         }
@@ -57,15 +56,13 @@ class SettingsDNSTextCell: SettingsCell, UITextFieldDelegate {
         backgroundView?.backgroundColor = UIColor.TextField.backgroundColor
         contentView.addSubview(textField)
 
-        if #available(iOS 13.0, *) {
-            overrideUserInterfaceStyle = .light
-        }
+        overrideUserInterfaceStyle = .light
 
         NSLayoutConstraint.activate([
             textField.topAnchor.constraint(equalTo: contentView.topAnchor),
             textField.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             textField.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            textField.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+            textField.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
         ])
 
         updateCellAppearance(animated: false)
@@ -130,7 +127,11 @@ class SettingsDNSTextCell: SettingsCell, UITextFieldDelegate {
         return true
     }
 
-    func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
+    func textField(
+        _ textField: UITextField,
+        shouldChangeCharactersIn range: NSRange,
+        replacementString string: String
+    ) -> Bool {
         let ipv4AddressCharset = CharacterSet.ipv4AddressCharset
         let ipv6AddressCharset = CharacterSet.ipv6AddressCharset
 
@@ -140,5 +141,4 @@ class SettingsDNSTextCell: SettingsCell, UITextFieldDelegate {
             }
         }
     }
-
 }

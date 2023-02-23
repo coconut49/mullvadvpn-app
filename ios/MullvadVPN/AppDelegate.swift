@@ -6,194 +6,118 @@
 //  Copyright © 2019 Mullvad VPN AB. All rights reserved.
 //
 
-import UIKit
 import BackgroundTasks
+import MullvadLogging
+import MullvadREST
+import Operations
+import RelayCache
 import StoreKit
+import UIKit
 import UserNotifications
-import Logging
 
 @UIApplicationMain
-class AppDelegate: UIResponder, UIApplicationDelegate {
+class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate,
+    StorePaymentManagerDelegate
+{
     private var logger: Logger!
 
     #if targetEnvironment(simulator)
-    private let simulatorTunnelProvider = SimulatorTunnelProviderHost()
+    private var simulatorTunnelProviderHost: SimulatorTunnelProviderHost?
     #endif
 
-    private let operationQueue: AsyncOperationQueue = {
-        let operationQueue = AsyncOperationQueue()
-        operationQueue.maxConcurrentOperationCount = 1
-        return operationQueue
-    }()
+    private let operationQueue = AsyncOperationQueue.makeSerial()
 
-    // An instance of scene delegate used on iOS 12 or earlier.
-    private var sceneDelegate: SceneDelegate?
+    private(set) var tunnelStore: TunnelStore!
+    private(set) var tunnelManager: TunnelManager!
+    private(set) var addressCache: REST.AddressCache!
+
+    private var proxyFactory: REST.ProxyFactory!
+    private(set) var apiProxy: REST.APIProxy!
+    private(set) var accountsProxy: REST.AccountsProxy!
+    private(set) var devicesProxy: REST.DevicesProxy!
+
+    private(set) var addressCacheTracker: AddressCacheTracker!
+    private(set) var relayCacheTracker: RelayCacheTracker!
+    private(set) var storePaymentManager: StorePaymentManager!
+    private var transportMonitor: TransportMonitor!
 
     // MARK: - Application lifecycle
 
-    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Setup logging
-        initLoggingSystem(bundleIdentifier: Bundle.main.bundleIdentifier!)
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+    ) -> Bool {
+        configureLogging()
 
         logger = Logger(label: "AppDelegate")
 
+        addressCache = REST.AddressCache(
+            securityGroupIdentifier: ApplicationConfiguration.securityGroupIdentifier,
+            isReadOnly: false
+        )!
+
+        proxyFactory = REST.ProxyFactory.makeProxyFactory(
+            transportProvider: { [weak self] in
+                return self?.transportMonitor.transport
+            },
+            addressCache: addressCache
+        )
+
+        apiProxy = proxyFactory.createAPIProxy()
+        accountsProxy = proxyFactory.createAccountsProxy()
+        devicesProxy = proxyFactory.createDevicesProxy()
+
+        relayCacheTracker = RelayCacheTracker(application: application, apiProxy: apiProxy)
+        addressCacheTracker = AddressCacheTracker(
+            application: application,
+            apiProxy: apiProxy,
+            store: addressCache
+        )
+
+        tunnelStore = TunnelStore(application: application)
+
+        tunnelManager = TunnelManager(
+            application: application,
+            tunnelStore: tunnelStore,
+            relayCacheTracker: relayCacheTracker,
+            accountsProxy: accountsProxy,
+            devicesProxy: devicesProxy
+        )
+
+        storePaymentManager = StorePaymentManager(
+            application: application,
+            queue: .default(),
+            apiProxy: apiProxy,
+            accountsProxy: accountsProxy
+        )
+
+        transportMonitor = TransportMonitor(tunnelManager: tunnelManager, tunnelStore: tunnelStore)
+
         #if targetEnvironment(simulator)
         // Configure mock tunnel provider on simulator
-        SimulatorTunnelProvider.shared.delegate = simulatorTunnelProvider
+        simulatorTunnelProviderHost = SimulatorTunnelProviderHost(
+            relayCacheTracker: relayCacheTracker
+        )
+        SimulatorTunnelProvider.shared.delegate = simulatorTunnelProviderHost
         #endif
 
-        if #available(iOS 13.0, *) {
-            // Register background tasks on iOS 13
-            registerBackgroundTasks()
-        } else {
-            // Set background refresh interval on iOS 12
-            application.setMinimumBackgroundFetchInterval(
-                ApplicationConfiguration.minimumBackgroundFetchInterval
-            )
-        }
-
+        registerBackgroundTasks()
         setupPaymentHandler()
         setupNotificationHandler()
+        addApplicationNotifications(application: application)
 
-        // Start initialization
-        let setupTunnelManagerOperation = AsyncBlockOperation(dispatchQueue: .main) { blockOperation in
-            TunnelManager.shared.loadConfiguration { error in
-                dispatchPrecondition(condition: .onQueue(.main))
+        startInitialization(application: application)
 
-                if let error = error {
-                    self.logger.error(chainedError: error, message: "Failed to load tunnels")
-
-                    // TODO: avoid throwing fatal error and show the problem report UI instead.
-                    fatalError(
-                        error.displayChain(message: "Failed to load VPN tunnel configuration")
-                    )
-                }
-
-                blockOperation.finish()
-            }
-        }
-
-        let setupUIOperation = AsyncBlockOperation(dispatchQueue: .main) {
-            self.logger.debug("Finished initialization.")
-
-            NotificationManager.shared.updateNotifications()
-            AppStorePaymentManager.shared.startPaymentQueueMonitoring()
-        }
-
-        operationQueue.addOperations([
-            setupTunnelManagerOperation,
-            setupUIOperation
-        ], waitUntilFinished: false)
-
-        if #available(iOS 13, *) {
-            return true
-        } else {
-            sceneDelegate = SceneDelegate()
-            sceneDelegate?.setupScene(windowFactory: ClassicWindowFactory())
-
-            return true
-        }
-    }
-
-    func application(
-        _ application: UIApplication,
-        performFetchWithCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    )
-    {
-        logger.debug("Start background refresh.")
-
-        let updateAddressCacheOperation = ResultBlockOperation<Bool, Error> { operation in
-            let handle = AddressCache.Tracker.shared.updateEndpoints { completion in
-                operation.finish(completion: completion)
-            }
-
-            operation.addCancellationBlock {
-                handle.cancel()
-            }
-        }
-
-        let updateRelaysOperation = ResultBlockOperation<RelayCache.FetchResult, Error>
-        { operation in
-            let handle = RelayCache.Tracker.shared.updateRelays { completion in
-                operation.finish(completion: completion)
-            }
-
-            operation.addCancellationBlock {
-                handle.cancel()
-            }
-        }
-
-        let rotatePrivateKeyOperation = ResultBlockOperation<Bool, TunnelManager.Error>
-        { operation in
-            let handle = TunnelManager.shared.rotatePrivateKey(forceRotate: false) { completion in
-                operation.finish(completion: completion)
-            }
-
-            operation.addCancellationBlock {
-                handle.cancel()
-            }
-        }
-        rotatePrivateKeyOperation.addDependencies([
-            updateRelaysOperation,
-            updateAddressCacheOperation
-        ])
-
-        let operations = [
-            updateAddressCacheOperation,
-            updateRelaysOperation,
-            rotatePrivateKeyOperation
-        ]
-
-        let completeOperation = TransformOperation<UIBackgroundFetchResult, Void, Never>(
-            dispatchQueue: .main
-        )
-
-        completeOperation.setExecutionBlock { backgroundFetchResult in
-            self.logger.debug("Finish background refresh. Status: \(backgroundFetchResult).")
-
-            completionHandler(backgroundFetchResult)
-        }
-
-        completeOperation.injectMany(context: [UIBackgroundFetchResult]())
-            .injectCompletion(from: updateAddressCacheOperation, via: { results, completion in
-                results.append(completion.backgroundFetchResult { $0 })
-            })
-            .injectCompletion(from: updateRelaysOperation, via: { results, completion in
-                results.append(completion.backgroundFetchResult { $0 == .newContent })
-            })
-            .injectCompletion(from: rotatePrivateKeyOperation, via: { results, completion in
-                results.append(completion.backgroundFetchResult { $0 })
-            })
-            .reduce { operationResults in
-                let initialResult = operationResults.first ?? .failed
-                let backgroundFetchResult = operationResults
-                    .reduce(initialResult) { partialResult, other in
-                        return partialResult.combine(with: other)
-                    }
-
-                return backgroundFetchResult
-            }
-
-        let groupOperation = GroupOperation(operations: operations)
-        groupOperation.addObserver(
-            BackgroundObserver(name: "Background refresh", cancelUponExpiration: true)
-        )
-
-        let operationQueue = AsyncOperationQueue()
-        operationQueue.addOperation(groupOperation)
-        operationQueue.addOperation(completeOperation)
+        return true
     }
 
     // MARK: - UISceneSession lifecycle
 
-    @available(iOS 13.0, *)
     func application(
         _ application: UIApplication,
         configurationForConnecting connectingSceneSession: UISceneSession,
         options: UIScene.ConnectionOptions
     ) -> UISceneConfiguration {
-        // Called when a new scene session is being created.
-        // Use this method to select a configuration to create the new scene with.
         let sceneConfiguration = UISceneConfiguration(
             name: "Default Configuration",
             sessionRole: connectingSceneSession.role
@@ -203,32 +127,43 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return sceneConfiguration
     }
 
-    @available(iOS 13.0, *)
     func application(
         _ application: UIApplication,
         didDiscardSceneSessions sceneSessions: Set<UISceneSession>
-    ) {
-        // Called when the user discards a scene session.
-        // If any sessions were discarded while the application was not running, this will be called shortly after application:didFinishLaunchingWithOptions.
-        // Use this method to release any resources that were specific to the discarded scenes, as they will not return.
+    ) {}
+
+    // MARK: - Notifications
+
+    @objc private func didBecomeActive(_ notification: Notification) {
+        tunnelManager.startPeriodicPrivateKeyRotation()
+        relayCacheTracker.startPeriodicUpdates()
+        addressCacheTracker.startPeriodicUpdates()
+    }
+
+    @objc private func willResignActive(_ notification: Notification) {
+        tunnelManager.stopPeriodicPrivateKeyRotation()
+        relayCacheTracker.stopPeriodicUpdates()
+        addressCacheTracker.stopPeriodicUpdates()
+    }
+
+    @objc private func didEnterBackground(_ notification: Notification) {
+        scheduleBackgroundTasks()
     }
 
     // MARK: - Background tasks
 
-    @available(iOS 13, *)
     private func registerBackgroundTasks() {
         registerAppRefreshTask()
         registerAddressCacheUpdateTask()
         registerKeyRotationTask()
     }
 
-    @available(iOS 13.0, *)
     private func registerAppRefreshTask() {
         let isRegistered = BGTaskScheduler.shared.register(
             forTaskWithIdentifier: ApplicationConfiguration.appRefreshTaskIdentifier,
             using: nil
         ) { task in
-            let handle = RelayCache.Tracker.shared.updateRelays { completion in
+            let handle = self.relayCacheTracker.updateRelays { completion in
                 task.setTaskCompleted(success: completion.isSuccess)
             }
 
@@ -246,13 +181,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
     }
 
-    @available(iOS 13.0, *)
     private func registerKeyRotationTask() {
         let isRegistered = BGTaskScheduler.shared.register(
             forTaskWithIdentifier: ApplicationConfiguration.privateKeyRotationTaskIdentifier,
             using: nil
         ) { task in
-            let handle = TunnelManager.shared.rotatePrivateKey(forceRotate: false) { completion in
+            let handle = self.tunnelManager.rotatePrivateKey(forceRotate: false) { completion in
                 self.scheduleKeyRotationTask()
 
                 task.setTaskCompleted(success: completion.isSuccess)
@@ -270,13 +204,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
     }
 
-    @available(iOS 13.0, *)
     private func registerAddressCacheUpdateTask() {
         let isRegistered = BGTaskScheduler.shared.register(
             forTaskWithIdentifier: ApplicationConfiguration.addressCacheUpdateTaskIdentifier,
             using: nil
         ) { task in
-            let handle = AddressCache.Tracker.shared.updateEndpoints { completion in
+            let handle = self.addressCacheTracker.updateEndpoints { completion in
                 self.scheduleAddressCacheUpdateTask()
 
                 task.setTaskCompleted(success: completion.isSuccess)
@@ -294,17 +227,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
     }
 
-    @available(iOS 13.0, *)
-    func scheduleBackgroundTasks() {
+    private func scheduleBackgroundTasks() {
         scheduleAppRefreshTask()
         scheduleKeyRotationTask()
         scheduleAddressCacheUpdateTask()
     }
 
-    @available(iOS 13.0, *)
     private func scheduleAppRefreshTask() {
         do {
-            let date = RelayCache.Tracker.shared.getNextUpdateDate()
+            let date = relayCacheTracker.getNextUpdateDate()
 
             let request = BGAppRefreshTaskRequest(
                 identifier: ApplicationConfiguration.appRefreshTaskIdentifier
@@ -316,16 +247,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             try BGTaskScheduler.shared.submit(request)
         } catch {
             logger.error(
-                chainedError: AnyChainedError(error),
+                error: error,
                 message: "Could not schedule app refresh task."
             )
         }
     }
 
-    @available(iOS 13.0, *)
     private func scheduleKeyRotationTask() {
         do {
-            guard let date = TunnelManager.shared.getNextKeyRotationDate() else {
+            guard let date = tunnelManager.getNextKeyRotationDate() else {
                 return
             }
 
@@ -340,16 +270,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             try BGTaskScheduler.shared.submit(request)
         } catch {
             logger.error(
-                chainedError: AnyChainedError(error),
+                error: error,
                 message: "Could not schedule private key rotation task."
             )
         }
     }
 
-    @available(iOS 13.0, *)
     private func scheduleAddressCacheUpdateTask() {
         do {
-            let date = AddressCache.Tracker.shared.nextScheduleDate()
+            let date = addressCacheTracker.nextScheduleDate()
 
             let request = BGProcessingTaskRequest(
                 identifier: ApplicationConfiguration.addressCacheUpdateTaskIdentifier
@@ -362,7 +291,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             try BGTaskScheduler.shared.submit(request)
         } catch {
             logger.error(
-                chainedError: AnyChainedError(error),
+                error: error,
                 message: "Could not schedule address cache update task."
             )
         }
@@ -370,51 +299,163 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     // MARK: - Private
 
+    private func configureLogging() {
+        var loggerBuilder = LoggerBuilder()
+        let bundleIdentifier = Bundle.main.bundleIdentifier!
+
+        try? loggerBuilder.addFileOutput(
+            securityGroupIdentifier: ApplicationConfiguration.securityGroupIdentifier,
+            basename: bundleIdentifier
+        )
+
+        #if DEBUG
+        loggerBuilder.addOSLogOutput(subsystem: bundleIdentifier)
+        #endif
+
+        loggerBuilder.install()
+    }
+
+    private func addApplicationNotifications(application: UIApplication) {
+        let notificationCenter = NotificationCenter.default
+
+        notificationCenter.addObserver(
+            self,
+            selector: #selector(didBecomeActive(_:)),
+            name: UIApplication.didBecomeActiveNotification,
+            object: application
+        )
+        notificationCenter.addObserver(
+            self,
+            selector: #selector(willResignActive(_:)),
+            name: UIApplication.willResignActiveNotification,
+            object: application
+        )
+        notificationCenter.addObserver(
+            self,
+            selector: #selector(didEnterBackground(_:)),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: application
+        )
+    }
+
     private func setupPaymentHandler() {
-        AppStorePaymentManager.shared.delegate = self
-        AppStorePaymentManager.shared.addPaymentObserver(TunnelManager.shared)
+        storePaymentManager.delegate = self
+        storePaymentManager.addPaymentObserver(tunnelManager)
     }
 
     private func setupNotificationHandler() {
         NotificationManager.shared.notificationProviders = [
-            AccountExpiryNotificationProvider(),
-            TunnelErrorNotificationProvider()
-        ]
-        UNUserNotificationCenter.current().delegate = self
-    }
-}
-
-// MARK: - AppStorePaymentManagerDelegate
-
-extension AppDelegate: AppStorePaymentManagerDelegate {
-
-    func appStorePaymentManager(_ manager: AppStorePaymentManager,
-                                didRequestAccountTokenFor payment: SKPayment) -> String?
-    {
-        // Since we do not persist the relation between the payment and account token between the
-        // app launches, we assume that all successful purchases belong to the active account token.
-        return TunnelManager.shared.accountNumber
-    }
-
-}
-
-// MARK: - UNUserNotificationCenterDelegate
-
-extension AppDelegate: UNUserNotificationCenterDelegate {
-
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
-        let blockOperation = AsyncBlockOperation(dispatchQueue: .main) {
-            if response.notification.request.identifier == accountExpiryNotificationIdentifier,
-               response.actionIdentifier == UNNotificationDefaultActionIdentifier {
-                if #available(iOS 13.0, *) {
+            TunnelStatusNotificationProvider(tunnelManager: tunnelManager),
+            AccountExpirySystemNotificationProvider(
+                tunnelManager: tunnelManager,
+                defaultActionHandler: {
                     let sceneDelegate = UIApplication.shared.connectedScenes
                         .first?.delegate as? SceneDelegate
 
                     sceneDelegate?.showUserAccount()
-                } else {
-                    self.sceneDelegate?.showUserAccount()
                 }
+            ),
+            AccountExpiryInAppNotificationProvider(tunnelManager: tunnelManager),
+        ]
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    private func startInitialization(application: UIApplication) {
+        let loadTunnelStoreOperation = AsyncBlockOperation(dispatchQueue: .main) { operation in
+            self.tunnelStore.loadPersistentTunnels { error in
+                if let error = error {
+                    self.logger.error(
+                        error: error,
+                        message: "Failed to load persistent tunnels."
+                    )
+                }
+                operation.finish()
             }
+        }
+
+        let migrateSettingsOperation = ResultBlockOperation<SettingsMigrationResult, Error>(
+            dispatchQueue: .main
+        ) { operation in
+            SettingsManager.migrateStore(with: self.proxyFactory) { migrationResult in
+                let finishHandler = {
+                    operation.finish(completion: .success(migrationResult))
+                }
+
+                guard case let .failure(error) = migrationResult,
+                      let migrationUIHandler = application.connectedScenes.compactMap({ scene in
+                          return scene.delegate as? SettingsMigrationUIHandler
+                      }).first
+                else {
+                    finishHandler()
+                    return
+                }
+
+                migrationUIHandler.showMigrationError(error, completionHandler: finishHandler)
+            }
+        }
+        migrateSettingsOperation.addDependency(loadTunnelStoreOperation)
+
+        let initTunnelManagerOperation = AsyncBlockOperation(dispatchQueue: .main) { operation in
+            self.tunnelManager.loadConfiguration { error in
+                // TODO: avoid throwing fatal error and show the problem report UI instead.
+                if let error = error {
+                    fatalError(error.localizedDescription)
+                }
+
+                self.logger.debug("Finished initialization.")
+
+                NotificationManager.shared.updateNotifications()
+                self.storePaymentManager.startPaymentQueueMonitoring()
+
+                operation.finish()
+            }
+        }
+        initTunnelManagerOperation.addDependency(migrateSettingsOperation)
+
+        let reconnectTunnelOperation = TransformOperation<SettingsMigrationResult, Void, Error>(
+            dispatchQueue: .main
+        ) { migrationResult in
+            if case .success = migrationResult {
+                self.logger.debug("Reconnect the tunnel after settings migration.")
+
+                self.tunnelManager.reconnectTunnel(selectNewRelay: true)
+            }
+        }
+        reconnectTunnelOperation.inject(from: migrateSettingsOperation)
+        reconnectTunnelOperation.addDependency(initTunnelManagerOperation)
+
+        operationQueue.addOperations(
+            [
+                loadTunnelStoreOperation,
+                migrateSettingsOperation,
+                initTunnelManagerOperation,
+                reconnectTunnelOperation,
+            ],
+            waitUntilFinished: false
+        )
+    }
+
+    // MARK: - StorePaymentManagerDelegate
+
+    func storePaymentManager(
+        _ manager: StorePaymentManager,
+        didRequestAccountTokenFor payment: SKPayment
+    ) -> String? {
+        // Since we do not persist the relation between payment and account number between the
+        // app launches, we assume that all successful purchases belong to the active account
+        // number.
+        return tunnelManager.deviceState.accountData?.number
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let blockOperation = AsyncBlockOperation(dispatchQueue: .main) {
+            NotificationManager.shared.handleSystemNotificationResponse(response)
 
             completionHandler()
         }
@@ -422,12 +463,16 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         operationQueue.addOperation(blockOperation)
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions)
+            -> Void
+    ) {
         if #available(iOS 14.0, *) {
             completionHandler([.list])
         } else {
             completionHandler([])
         }
     }
-
 }

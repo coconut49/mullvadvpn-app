@@ -10,6 +10,8 @@ exec 2>&1 > $LOG_DIR/postinstall.log
 echo "Running postinstall at $(date)"
 
 INSTALL_DIR=$2
+# NOTE: This path must be kept in sync with the path defined
+# in mullvad-daemon/src/macos_launch_daemon.rs
 DAEMON_PLIST_PATH="/Library/LaunchDaemons/net.mullvad.daemon.plist"
 
 DAEMON_PLIST=$(cat <<-EOM
@@ -41,6 +43,9 @@ DAEMON_PLIST=$(cat <<-EOM
                         <integer>1024</integer>
                 </dict>
 
+                <key>AssociatedBundleIdentifiers</key>
+                <string>net.mullvad.vpn</string>
+
                 <key>StandardErrorPath</key>
                 <string>$LOG_DIR/stderr.log</string>
         </dict>
@@ -49,7 +54,12 @@ EOM
 )
 
 ZSH_COMPLETIONS_DIR="/usr/local/share/zsh/site-functions/"
-FISH_COMPLETIONS_DIR="/usr/local/share/fish/vendor_completions.d/"
+
+if [[ -d "/opt/homebrew/share/fish/vendor_completions.d/" ]]; then
+    FISH_COMPLETIONS_DIR="/opt/homebrew/share/fish/vendor_completions.d/"
+else
+    FISH_COMPLETIONS_DIR="/usr/local/share/fish/vendor_completions.d/"
+fi
 
 launchctl unload -w $DAEMON_PLIST_PATH
 cp "$LOG_DIR/daemon.log" "$LOG_DIR/old-install-daemon.log" \
@@ -66,9 +76,9 @@ mkdir -p /usr/local/bin
 ln -sf "$INSTALL_DIR/Mullvad VPN.app/Contents/Resources/mullvad" /usr/local/bin/mullvad
 ln -sf "$INSTALL_DIR/Mullvad VPN.app/Contents/Resources/mullvad-problem-report" /usr/local/bin/mullvad-problem-report
 
-if [ -d "$FISH_COMPLETIONS_DIR" ]; then
-    ln -sf "$INSTALL_DIR/Mullvad VPN.app/Contents/Resources/mullvad.fish" $FISH_COMPLETIONS_DIR
-fi
-
 mkdir -p "$ZSH_COMPLETIONS_DIR"
 ln -sf "$INSTALL_DIR/Mullvad VPN.app/Contents/Resources/_mullvad" "$ZSH_COMPLETIONS_DIR/_mullvad"
+
+if [[ -d "$FISH_COMPLETIONS_DIR" ]]; then
+    ln -sf "$INSTALL_DIR/Mullvad VPN.app/Contents/Resources/mullvad.fish" "$FISH_COMPLETIONS_DIR/mullvad.fish"
+fi

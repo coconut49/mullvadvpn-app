@@ -41,7 +41,6 @@ struct InnerParametersGenerator {
     tunnel_options: TunnelOptions,
     account_manager: AccountManagerHandle,
 
-    // TODO: Move this to `RelaySelector`?
     last_generated_relays: Option<LastSelectedRelays>,
 }
 
@@ -124,6 +123,7 @@ impl InnerParametersGenerator {
         let _data = self.device().await?;
         match self.relay_selector.get_relay(retry_attempt) {
             Ok((SelectedRelay::Custom(custom_relay), _bridge, _obfsucator)) => {
+                self.last_generated_relays = None;
                 custom_relay
                     // TODO: generate proxy settings for custom tunnels
                     .to_tunnel_parameters(self.tunnel_options.clone(), None)
@@ -182,6 +182,8 @@ impl InnerParametersGenerator {
                     options: self.tunnel_options.openvpn.clone(),
                     generic_options: self.tunnel_options.generic.clone(),
                     proxy: bridge_settings,
+                    #[cfg(target_os = "linux")]
+                    fwmark: mullvad_types::TUNNEL_FWMARK,
                 }
                 .into())
             }
@@ -216,8 +218,14 @@ impl InnerParametersGenerator {
                         exit_peer: endpoint.exit_peer,
                         ipv4_gateway: endpoint.ipv4_gateway,
                         ipv6_gateway: Some(endpoint.ipv6_gateway),
+                        #[cfg(target_os = "linux")]
+                        fwmark: Some(mullvad_types::TUNNEL_FWMARK),
                     },
-                    options: self.tunnel_options.wireguard.options.clone(),
+                    options: self
+                        .tunnel_options
+                        .wireguard
+                        .clone()
+                        .into_talpid_tunnel_options(),
                     generic_options: self.tunnel_options.generic.clone(),
                     obfuscation: obfuscator_config,
                 }

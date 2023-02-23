@@ -1,42 +1,32 @@
 import { exec as execAsync } from 'child_process';
-import { Menu, NativeImage, nativeImage, Tray } from 'electron';
+import { NativeImage, nativeImage, Tray } from 'electron';
 import path from 'path';
-import { sprintf } from 'sprintf-js';
 import { promisify } from 'util';
 
-import { connectEnabled, disconnectEnabled, reconnectEnabled } from '../shared/connect-helper';
-import { ILocation, TunnelState } from '../shared/daemon-rpc-types';
-import { messages, relayLocations } from '../shared/gettext';
 import log from '../shared/logging';
 import KeyframeAnimation from './keyframe-animation';
-import WindowController from './window-controller';
 
 const exec = promisify(execAsync);
 
 export type TrayIconType = 'unsecured' | 'securing' | 'secured';
 
-type IconSets = {
-  regular: NativeImage[];
-  template: NativeImage[];
-  white: NativeImage[];
-  black: NativeImage[];
-};
+type IconParameters = { monochromatic: boolean; notification: boolean };
 
 export default class TrayIconController {
   private animation?: KeyframeAnimation;
-  private iconSets: IconSets = { regular: [], template: [], white: [], black: [] };
   private iconSet: NativeImage[] = [];
+  private iconParameters: IconParameters;
+
+  private updateThrottlePromise?: Promise<void>;
 
   constructor(
     private tray: Tray,
-    private windowController: WindowController,
     private iconTypeValue: TrayIconType,
-    private useMonochromaticIconValue: boolean,
-    private connect: () => void,
-    private reconnect: () => void,
-    private disconnect: () => void,
+    monochromaticIcon: boolean,
+    notificationIcon: boolean,
   ) {
-    this.loadImages();
+    this.iconParameters = { monochromatic: monochromaticIcon, notification: notificationIcon };
+    void this.updateTheme();
   }
 
   public dispose() {
@@ -46,47 +36,29 @@ export default class TrayIconController {
     }
   }
 
-  public setWindowController(windowController: WindowController) {
-    this.windowController = windowController;
-  }
-
   get iconType(): TrayIconType {
     return this.iconTypeValue;
   }
 
-  public async updateTheme() {
-    if (this.useMonochromaticIconValue) {
-      switch (process.platform) {
-        case 'darwin':
-          this.iconSet = this.iconSets.template;
-          break;
-        case 'win32': {
-          if (await this.getSystemUsesLightTheme()) {
-            this.iconSet = this.iconSets.black;
-          } else {
-            this.iconSet = this.iconSets.white;
-          }
-          break;
-        }
-        case 'linux':
-        default:
-          this.iconSet = this.iconSets.white;
-          break;
-      }
-    } else {
-      this.iconSet = this.iconSets.regular;
-    }
+  public updateTheme(): Promise<void> {
+    // For some reason the icon doesn't update if the iconSet is changed to quickly. Adding a
+    // throttle fixes this issue.
+    this.updateThrottlePromise ??= new Promise((resolve) => {
+      setTimeout(() => {
+        this.updateThrottlePromise = undefined;
+        void this.updateThemeImpl().then(resolve);
+      }, 200);
+    });
 
-    if (this.animation === undefined) {
-      this.initAnimation();
-    } else if (!this.animation.isRunning) {
-      this.animation.play({ end: this.targetFrame() });
-    }
+    return this.updateThrottlePromise;
   }
 
-  public async setUseMonochromaticIcon(useMonochromaticIcon: boolean) {
-    this.useMonochromaticIconValue = useMonochromaticIcon;
-    await this.updateTheme();
+  public setMonochromaticIcon(monochromaticIcon: boolean) {
+    void this.updateIconParameters({ monochromatic: monochromaticIcon });
+  }
+
+  public showNotificationIcon(notificationIcon: boolean) {
+    void this.updateIconParameters({ notification: notificationIcon });
   }
 
   public animateToIcon(type: TrayIconType) {
@@ -102,64 +74,28 @@ export default class TrayIconController {
     animation.play({ end: frame });
   }
 
-  public setContextMenu(connectedToDaemon: boolean, loggedIn: boolean, tunnelState: TunnelState) {
-    if (process.platform === 'linux') {
-      this.tray.setContextMenu(this.createContextMenu(connectedToDaemon, loggedIn, tunnelState));
+  private async updateThemeImpl() {
+    const systemUsesLightTheme = await this.getSystemUsesLightTheme();
+    this.iconSet = this.loadImages(systemUsesLightTheme);
+
+    if (this.animation === undefined) {
+      this.initAnimation();
+    } else if (!this.animation.isRunning) {
+      this.animation.play({ end: this.targetFrame() });
     }
   }
 
-  public setTooltip(connectedToDaemon: boolean, tunnelState: TunnelState) {
-    const tooltip = this.createTooltipText(connectedToDaemon, tunnelState);
-    this.tray?.setToolTip(tooltip);
-  }
-
-  public popUpContextMenu(connectedToDaemon: boolean, loggedIn: boolean, tunnelState: TunnelState) {
-    this.tray.popUpContextMenu(this.createContextMenu(connectedToDaemon, loggedIn, tunnelState));
-  }
-
-  private createTooltipText(connectedToDaemon: boolean, tunnelState: TunnelState): string {
-    if (!connectedToDaemon) {
-      return messages.pgettext('tray-icon-context-menu', 'Disconnected from system service');
+  // This function uses a promise as a lock to prevent multiple simultaneous updates
+  private updateIconParameters(parameters: Partial<IconParameters>) {
+    if (
+      (parameters.monochromatic !== undefined &&
+        parameters.monochromatic !== this.iconParameters.monochromatic) ||
+      (parameters.notification !== undefined &&
+        parameters.notification !== this.iconParameters.notification)
+    ) {
+      this.iconParameters = { ...this.iconParameters, ...parameters };
+      void this.updateTheme();
     }
-
-    switch (tunnelState.state) {
-      case 'disconnected':
-        return messages.gettext('Disconnected');
-      case 'disconnecting':
-        return messages.gettext('Disconnecting');
-      case 'connecting': {
-        const location = this.createLocationString(tunnelState.details?.location);
-        return location
-          ? sprintf(messages.pgettext('tray-icon-tooltip', 'Connecting. %(location)s'), {
-              location,
-            })
-          : messages.gettext('Connecting');
-      }
-      case 'connected': {
-        const location = this.createLocationString(tunnelState.details.location);
-        return location
-          ? sprintf(messages.pgettext('tray-icon-tooltip', 'Connected. %(location)s'), {
-              location,
-            })
-          : messages.gettext('Connected');
-      }
-    }
-
-    return 'Mullvad VPN';
-  }
-
-  private createLocationString(location?: ILocation): string | undefined {
-    if (location === undefined) {
-      return undefined;
-    }
-
-    const country = relayLocations.gettext(location.country);
-    return location.city
-      ? sprintf(messages.pgettext('tray-icon-tooltip', '%(city)s, %(country)s'), {
-          city: relayLocations.gettext(location.city),
-          country,
-        })
-      : country;
   }
 
   private initAnimation() {
@@ -181,21 +117,22 @@ export default class TrayIconController {
     }
   };
 
-  private loadImages() {
-    this.iconSets.regular = this.loadImageSet('');
-
-    switch (process.platform) {
-      case 'darwin':
-        this.iconSets.template = this.loadImageSet('Template');
-        break;
-      case 'win32':
-        this.iconSets.white = this.loadImageSet('_white');
-        this.iconSets.black = this.loadImageSet('_black');
-        break;
-      case 'linux':
-      default:
-        this.iconSets.white = this.loadImageSet('_white');
-        break;
+  private loadImages(systemUsesLightTheme?: boolean): NativeImage[] {
+    const notificationIcon = this.iconParameters.notification ? '_notification' : '';
+    if (this.iconParameters.monochromatic) {
+      switch (process.platform) {
+        case 'darwin':
+          return this.loadImageSet(`${notificationIcon}Template`);
+        case 'win32':
+          return systemUsesLightTheme
+            ? this.loadImageSet(`_black${notificationIcon}`)
+            : this.loadImageSet(`_white${notificationIcon}`);
+        case 'linux':
+        default:
+          return this.loadImageSet(`_white${notificationIcon}`);
+      }
+    } else {
+      return this.loadImageSet(notificationIcon);
     }
   }
 
@@ -205,12 +142,16 @@ export default class TrayIconController {
   }
 
   private getImagePath(frame: number, suffix?: string) {
-    const basePath = path.resolve(path.join(__dirname, '../../assets/images/menubar icons'));
+    const basePath = path.resolve(path.join(__dirname, '../../assets/images/menubar-icons'));
     const extension = process.platform === 'win32' ? 'ico' : 'png';
     return path.join(basePath, process.platform, `lock-${frame}${suffix}.${extension}`);
   }
 
   private async getSystemUsesLightTheme(): Promise<boolean | undefined> {
+    if (process.platform !== 'win32') {
+      return undefined;
+    }
+
     try {
       // This registry entry contains information about the tray background color. This is
       // needed to decide between white and black icons.
@@ -251,41 +192,5 @@ export default class TrayIconController {
       case 'secured':
         return 8;
     }
-  }
-
-  private createContextMenu(
-    connectedToDaemon: boolean,
-    loggedIn: boolean,
-    tunnelState: TunnelState,
-  ) {
-    const template: Electron.MenuItemConstructorOptions[] = [
-      {
-        label: sprintf(messages.pgettext('tray-icon-context-menu', 'Open %(mullvadVpn)s'), {
-          mullvadVpn: 'Mullvad VPN',
-        }),
-        click: () => this.windowController.show(),
-      },
-      { type: 'separator' },
-      {
-        id: 'connect',
-        label: messages.gettext('Connect'),
-        enabled: connectEnabled(connectedToDaemon, loggedIn, tunnelState.state),
-        click: this.connect,
-      },
-      {
-        id: 'reconnect',
-        label: messages.gettext('Reconnect'),
-        enabled: reconnectEnabled(connectedToDaemon, loggedIn, tunnelState.state),
-        click: this.reconnect,
-      },
-      {
-        id: 'disconnect',
-        label: messages.gettext('Disconnect'),
-        enabled: disconnectEnabled(connectedToDaemon, tunnelState.state),
-        click: this.disconnect,
-      },
-    ];
-
-    return Menu.buildFromTemplate(template);
   }
 }

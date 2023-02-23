@@ -7,8 +7,8 @@
 //
 
 import Foundation
+import MullvadLogging
 import WireGuardKit
-import Logging
 
 extension WireGuardLogLevel {
     var loggerLevel: Logger.Level {

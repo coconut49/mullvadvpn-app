@@ -1,7 +1,5 @@
 use clap::{crate_authors, crate_description, crate_name, App, Arg};
 
-use crate::version;
-
 #[derive(Debug)]
 pub struct Config {
     pub log_level: log::LevelFilter,
@@ -9,14 +7,17 @@ pub struct Config {
     pub log_stdout_timestamps: bool,
     pub run_as_service: bool,
     pub register_service: bool,
-    pub restart_service: bool,
+    #[cfg(target_os = "macos")]
+    pub launch_daemon_status: bool,
+    #[cfg(target_os = "linux")]
+    pub initialize_firewall_and_exit: bool,
 }
 
 pub fn get_config() -> &'static Config {
     lazy_static::lazy_static! {
         static ref CONFIG: Config = create_config();
     }
-    &*CONFIG
+    &CONFIG
 }
 
 pub fn create_config() -> Config {
@@ -31,17 +32,24 @@ pub fn create_config() -> Config {
     let log_to_file = !matches.is_present("disable_log_to_file");
     let log_stdout_timestamps = !matches.is_present("disable_stdout_timestamps");
 
+    #[cfg(target_os = "linux")]
+    let initialize_firewall_and_exit =
+        cfg!(target_os = "linux") && matches.is_present("initialize-early-boot-firewall");
     let run_as_service = cfg!(windows) && matches.is_present("run_as_service");
     let register_service = cfg!(windows) && matches.is_present("register_service");
-    let restart_service = cfg!(windows) && matches.is_present("restart_service");
+    #[cfg(target_os = "macos")]
+    let launch_daemon_status = matches.is_present("launch_daemon_status");
 
     Config {
+        #[cfg(target_os = "linux")]
+        initialize_firewall_and_exit,
         log_level,
         log_to_file,
         log_stdout_timestamps,
         run_as_service,
         register_service,
-        restart_service,
+        #[cfg(target_os = "macos")]
+        launch_daemon_status,
     }
 }
 
@@ -60,15 +68,15 @@ lazy_static::lazy_static! {
 
 ",
         mullvad_paths::get_default_resource_dir().display(),
-        mullvad_paths::get_default_settings_dir().expect("Unable to get settings dir").display(),
-        mullvad_paths::get_default_cache_dir().expect("Unable to get cache dir").display(),
-        mullvad_paths::get_default_log_dir().expect("Unable to get log dir").display(),
+        mullvad_paths::get_default_settings_dir().map(|dir| dir.display().to_string()).unwrap_or_else(|_| "N/A".to_string()),
+        mullvad_paths::get_default_cache_dir().map(|dir| dir.display().to_string()).unwrap_or_else(|_| "N/A".to_string()),
+        mullvad_paths::get_default_log_dir().map(|dir| dir.display().to_string()).unwrap_or_else(|_| "N/A".to_string()),
         mullvad_paths::get_default_rpc_socket_path().display());
 }
 
 fn create_app() -> App<'static> {
     let mut app = App::new(crate_name!())
-        .version(version::PRODUCT_VERSION)
+        .version(mullvad_version::VERSION)
         .author(crate_authors!(", "))
         .about(crate_description!())
         .after_help(ENV_DESC.as_str())
@@ -100,11 +108,20 @@ fn create_app() -> App<'static> {
                 .long("register-service")
                 .help("Register itself as a system service"),
         )
-        .arg(
-            Arg::new("restart_service")
-                .long("restart-service")
-                .help("Restarts the existing system service"),
+    }
+
+    if cfg!(target_os = "linux") {
+        app = app.arg(
+            Arg::new("initialize-early-boot-firewall")
+                .long("initialize-early-boot-firewall")
+                .help("Initialize firewall to be used during early boot and exit"),
         )
+    }
+
+    if cfg!(target_os = "macos") {
+        app = app.arg(Arg::new("launch_daemon_status").long("launch-daemon-status").help(
+            "Checks the status of the launch daemon. The exit code represents the current status",
+        ))
     }
     app
 }

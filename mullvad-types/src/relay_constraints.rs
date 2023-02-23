@@ -151,7 +151,7 @@ impl fmt::Display for RelaySettings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match self {
             RelaySettings::CustomTunnelEndpoint(endpoint) => {
-                write!(f, "custom endpoint {}", endpoint)
+                write!(f, "custom endpoint {endpoint}")
             }
             RelaySettings::Normal(constraints) => constraints.fmt(f),
         }
@@ -258,7 +258,7 @@ impl fmt::Display for RelayConstraints {
         match self.ownership {
             Constraint::Any => Ok(()),
             Constraint::Only(ref constraint) => {
-                write!(f, " and {}", constraint)
+                write!(f, " and {constraint}")
             }
         }
     }
@@ -279,15 +279,15 @@ pub enum LocationConstraint {
     Hostname(CountryCode, CityCode, Hostname),
 }
 
-impl Match<Relay> for LocationConstraint {
-    fn matches(&self, relay: &Relay) -> bool {
+impl LocationConstraint {
+    pub fn matches_with_opts(&self, relay: &Relay, ignore_include_in_country: bool) -> bool {
         match self {
             LocationConstraint::Country(ref country) => {
                 relay
                     .location
                     .as_ref()
                     .map_or(false, |loc| loc.country_code == *country)
-                    && relay.include_in_country
+                    && (ignore_include_in_country || relay.include_in_country)
             }
             LocationConstraint::City(ref country, ref city) => {
                 relay.location.as_ref().map_or(false, |loc| {
@@ -302,6 +302,23 @@ impl Match<Relay> for LocationConstraint {
                 })
             }
         }
+    }
+}
+
+impl Constraint<LocationConstraint> {
+    pub fn matches_with_opts(&self, relay: &Relay, ignore_include_in_country: bool) -> bool {
+        match self {
+            Constraint::Only(constraint) => {
+                constraint.matches_with_opts(relay, ignore_include_in_country)
+            }
+            Constraint::Any => true,
+        }
+    }
+}
+
+impl Match<Relay> for LocationConstraint {
+    fn matches(&self, relay: &Relay) -> bool {
+        self.matches_with_opts(relay, false)
     }
 }
 
@@ -361,6 +378,7 @@ pub struct Providers {
 }
 
 /// Returned if the iterator contained no providers.
+#[derive(Debug)]
 pub struct NoProviders(());
 
 impl Providers {
@@ -372,6 +390,10 @@ impl Providers {
             return Err(NoProviders(()));
         }
         Ok(providers)
+    }
+
+    pub fn into_vec(self) -> Vec<Provider> {
+        self.providers.into_iter().collect()
     }
 }
 
@@ -392,9 +414,9 @@ impl fmt::Display for Providers {
         write!(f, "provider(s) ")?;
         for (i, provider) in self.providers.iter().enumerate() {
             if i == 0 {
-                write!(f, "{}", provider)?;
+                write!(f, "{provider}")?;
             } else {
-                write!(f, ", {}", provider)?;
+                write!(f, ", {provider}")?;
             }
         }
         Ok(())
@@ -404,10 +426,10 @@ impl fmt::Display for Providers {
 impl fmt::Display for LocationConstraint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match self {
-            LocationConstraint::Country(country) => write!(f, "country {}", country),
-            LocationConstraint::City(country, city) => write!(f, "city {}, {}", city, country),
+            LocationConstraint::Country(country) => write!(f, "country {country}"),
+            LocationConstraint::City(country, city) => write!(f, "city {city}, {country}"),
             LocationConstraint::Hostname(country, city, hostname) => {
-                write!(f, "city {}, {}, hostname {}", city, country, hostname)
+                write!(f, "city {city}, {country}, hostname {hostname}")
             }
         }
     }
@@ -419,7 +441,7 @@ pub struct TransportPort {
     pub port: Constraint<u16>,
 }
 
-/// [`Constraint`]s applicable to OpenVPN relay servers.
+/// [`Constraint`]s applicable to OpenVPN relays.
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Deserialize, Serialize)]
 pub struct OpenVpnConstraints {
     pub port: Constraint<TransportPort>,
@@ -432,7 +454,7 @@ impl fmt::Display for OpenVpnConstraints {
             Constraint::Only(port) => {
                 match port.port {
                     Constraint::Any => write!(f, "any port")?,
-                    Constraint::Only(port) => write!(f, "port {}", port)?,
+                    Constraint::Only(port) => write!(f, "port {port}")?,
                 }
                 write!(f, "/{}", port.protocol)
             }
@@ -440,7 +462,7 @@ impl fmt::Display for OpenVpnConstraints {
     }
 }
 
-/// [`Constraint`]s applicable to WireGuard relay servers.
+/// [`Constraint`]s applicable to WireGuard relays.
 #[derive(Debug, Default, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct WireguardConstraints {
@@ -454,17 +476,17 @@ impl fmt::Display for WireguardConstraints {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match self.port {
             Constraint::Any => write!(f, "any port")?,
-            Constraint::Only(port) => write!(f, "port {}", port)?,
+            Constraint::Only(port) => write!(f, "port {port}")?,
         }
         write!(f, " over ")?;
         match self.ip_version {
             Constraint::Any => write!(f, "IPv4 or IPv6")?,
-            Constraint::Only(protocol) => write!(f, "{}", protocol)?,
+            Constraint::Only(protocol) => write!(f, "{protocol}")?,
         }
         if self.use_multihop {
             match &self.entry_location {
                 Constraint::Any => write!(f, " (via any location)"),
-                Constraint::Only(location) => write!(f, " (via {})", location),
+                Constraint::Only(location) => write!(f, " (via {location})"),
             }
         } else {
             Ok(())
@@ -511,7 +533,7 @@ impl fmt::Display for Udp2TcpObfuscationSettings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.port {
             Constraint::Any => write!(f, "any port"),
-            Constraint::Only(port) => write!(f, "port {}", port),
+            Constraint::Only(port) => write!(f, "port {port}"),
         }
     }
 }
@@ -549,7 +571,7 @@ impl fmt::Display for BridgeConstraints {
         match self.ownership {
             Constraint::Any => Ok(()),
             Constraint::Only(ref constraint) => {
-                write!(f, " and {}", constraint)
+                write!(f, " and {constraint}")
             }
         }
     }

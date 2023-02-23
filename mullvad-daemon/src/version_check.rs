@@ -1,7 +1,4 @@
-use crate::{
-    version::{is_beta_version, PRODUCT_VERSION},
-    DaemonEventSender,
-};
+use crate::{version::is_beta_version, DaemonEventSender};
 use futures::{
     channel::{mpsc, oneshot},
     stream::FusedStream,
@@ -24,7 +21,7 @@ use tokio::fs::{self, File};
 const VERSION_INFO_FILENAME: &str = "version-info.json";
 
 lazy_static::lazy_static! {
-    static ref APP_VERSION: ParsedAppVersion = ParsedAppVersion::from_str(PRODUCT_VERSION).unwrap();
+    static ref APP_VERSION: ParsedAppVersion = ParsedAppVersion::from_str(mullvad_version::VERSION).unwrap();
     static ref IS_DEV_BUILD: bool = APP_VERSION.is_dev();
 }
 
@@ -47,7 +44,7 @@ const PLATFORM: &str = "windows";
 #[cfg(target_os = "android")]
 const PLATFORM: &str = "android";
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct CachedAppVersionInfo {
     #[serde(flatten)]
     pub version_info: AppVersionInfo,
@@ -58,7 +55,7 @@ impl From<AppVersionInfo> for CachedAppVersionInfo {
     fn from(version_info: AppVersionInfo) -> CachedAppVersionInfo {
         CachedAppVersionInfo {
             version_info,
-            cached_from_version: PRODUCT_VERSION.to_owned(),
+            cached_from_version: mullvad_version::VERSION.to_owned(),
         }
     }
 }
@@ -190,7 +187,7 @@ impl VersionUpdater {
         let download_future_factory = move || {
             version_proxy
                 .version_check(
-                    PRODUCT_VERSION.to_owned(),
+                    mullvad_version::VERSION.to_owned(),
                     PLATFORM,
                     platform_version.clone(),
                 )
@@ -228,7 +225,7 @@ impl VersionUpdater {
         let download_future_factory = move || {
             let when_available = api_handle.wait_background();
             let request = version_proxy.version_check(
-                PRODUCT_VERSION.to_owned(),
+                mullvad_version::VERSION.to_owned(),
                 PLATFORM,
                 platform_version.clone(),
             );
@@ -275,17 +272,26 @@ impl VersionUpdater {
         response: mullvad_api::AppVersionResponse,
     ) -> AppVersionInfo {
         let suggested_upgrade = Self::suggested_upgrade(
-            &*APP_VERSION,
+            &APP_VERSION,
             &response.latest_stable,
             &response.latest_beta,
             self.show_beta_releases || is_beta_version(),
         );
+
+        let wg_migration_threshold = if response.x_threshold_wg_default.is_nan() {
+            // If the value should for some strange reason be NaN then safe default to 0.0
+            0.0
+        } else {
+            // Make sure that the returned value is between 0% and 100%
+            response.x_threshold_wg_default.clamp(0.0, 1.0)
+        };
 
         AppVersionInfo {
             supported: response.supported,
             latest_stable: response.latest_stable.unwrap_or_else(|| "".to_owned()),
             latest_beta: response.latest_beta,
             suggested_upgrade,
+            wg_migration_threshold,
         }
     }
 
@@ -295,24 +301,20 @@ impl VersionUpdater {
         latest_beta: &str,
         show_beta: bool,
     ) -> Option<String> {
-        if !*IS_DEV_BUILD {
-            let stable_version = latest_stable
-                .as_ref()
-                .and_then(|stable| ParsedAppVersion::from_str(stable).ok());
+        let stable_version = latest_stable
+            .as_ref()
+            .and_then(|stable| ParsedAppVersion::from_str(stable).ok());
 
-            let beta_version = if show_beta {
-                ParsedAppVersion::from_str(latest_beta).ok()
-            } else {
-                None
-            };
+        let beta_version = if show_beta {
+            ParsedAppVersion::from_str(latest_beta).ok()
+        } else {
+            None
+        };
 
-            let latest_version = stable_version.iter().chain(beta_version.iter()).max()?;
+        let latest_version = stable_version.iter().chain(beta_version.iter()).max()?;
 
-            if current_version < latest_version {
-                Some(latest_version.to_string())
-            } else {
-                None
-            }
+        if current_version < latest_version {
+            Some(latest_version.to_string())
         } else {
             None
         }
@@ -364,7 +366,7 @@ impl VersionUpdater {
                                 .clone()
                             {
                                 let suggested_upgrade = Self::suggested_upgrade(
-                                    &*APP_VERSION,
+                                    &APP_VERSION,
                                     &Some(last_app_version_info.latest_stable.clone()),
                                     &last_app_version_info.latest_beta,
                                     self.show_beta_releases || is_beta_version(),
@@ -375,6 +377,7 @@ impl VersionUpdater {
                                     latest_stable: last_app_version_info.latest_stable,
                                     latest_beta: last_app_version_info.latest_beta,
                                     suggested_upgrade,
+                                    wg_migration_threshold: last_app_version_info.wg_migration_threshold,
                                 }).await;
                             }
                         }
@@ -440,7 +443,7 @@ async fn try_load_cache(cache_dir: &Path) -> Result<AppVersionInfo, Error> {
     let version_info: CachedAppVersionInfo =
         serde_json::from_str(&content).map_err(Error::Deserialize)?;
 
-    if version_info.cached_from_version == PRODUCT_VERSION {
+    if version_info.cached_from_version == mullvad_version::VERSION {
         Ok(version_info.version_info)
     } else {
         Err(Error::CacheVersionMismatch)
@@ -465,9 +468,13 @@ fn dev_version_cache() -> AppVersionInfo {
 
     AppVersionInfo {
         supported: false,
-        latest_stable: PRODUCT_VERSION.to_owned(),
-        latest_beta: PRODUCT_VERSION.to_owned(),
+        latest_stable: mullvad_version::VERSION.to_owned(),
+        latest_beta: mullvad_version::VERSION.to_owned(),
         suggested_upgrade: None,
+        // Use WireGuard on 75% of dev builds. So we can manually modify
+        // wg_migration_rand_num in the settings and verify that the migration
+        // works as expected.
+        wg_migration_threshold: 0.75,
     }
 }
 

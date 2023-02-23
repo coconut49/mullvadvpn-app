@@ -1,7 +1,5 @@
 use crate::net::{Endpoint, GenericTunnelOptions, TransportProtocol};
 use ipnetwork::IpNetwork;
-#[cfg(target_os = "android")]
-use jnix::IntoJava;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
@@ -9,10 +7,11 @@ use std::{
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
 };
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Tunnel parameters required to start a `WireguardMonitor`.
 /// See [`crate::net::TunnelParameters`].
-#[derive(Clone, Eq, PartialEq, Deserialize, Serialize, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct TunnelParameters {
     pub connection: ConnectionConfig,
     pub options: TunnelOptions,
@@ -29,6 +28,8 @@ pub struct ConnectionConfig {
     /// Gateway used by the tunnel (a private address).
     pub ipv4_gateway: Ipv4Addr,
     pub ipv6_gateway: Option<Ipv6Addr>,
+    #[cfg(target_os = "linux")]
+    pub fwmark: Option<u32>,
 }
 
 impl ConnectionConfig {
@@ -55,7 +56,10 @@ pub struct PeerConfig {
     pub allowed_ips: Vec<IpNetwork>,
     /// IP address of the WireGuard server.
     pub endpoint: SocketAddr,
-    /// Preshared key.
+    /// Preshared key (PSK). The PSK should never be persisted, so it does not serialize
+    /// or deserialize. A PSK is only used with quantum-resistant tunnels and are then
+    /// ephemeral and living in memory only.
+    #[serde(skip)]
     pub psk: Option<PresharedKey>,
 }
 
@@ -67,44 +71,15 @@ pub struct TunnelConfig {
 }
 
 /// Options in [`TunnelParameters`] that apply to any WireGuard connection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-#[cfg_attr(target_os = "android", derive(IntoJava))]
-#[cfg_attr(
-    target_os = "android",
-    jnix(package = "net.mullvad.talpid.net.wireguard")
-)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TunnelOptions {
     /// MTU for the wireguard tunnel
-    #[cfg_attr(
-        target_os = "android",
-        jnix(map = "|maybe_mtu| maybe_mtu.map(|mtu| mtu as i32)")
-    )]
     pub mtu: Option<u16>,
-    /// Obtain a PSK using the relay config client.
-    pub use_pq_safe_psk: bool,
     /// Temporary switch for wireguard-nt
     #[cfg(windows)]
-    #[serde(default = "default_wgnt_setting")]
-    #[serde(rename = "wireguard_nt")]
     pub use_wireguard_nt: bool,
-}
-
-#[cfg(windows)]
-fn default_wgnt_setting() -> bool {
-    true
-}
-
-#[allow(clippy::derivable_impls)]
-impl Default for TunnelOptions {
-    fn default() -> Self {
-        Self {
-            mtu: None,
-            use_pq_safe_psk: false,
-            #[cfg(windows)]
-            use_wireguard_nt: default_wgnt_setting(),
-        }
-    }
+    /// Perform PQ-safe PSK exchange when connecting
+    pub quantum_resistant: bool,
 }
 
 /// Wireguard x25519 private key
@@ -118,7 +93,7 @@ impl PrivateKey {
     }
 
     pub fn new_from_random() -> Self {
-        PrivateKey(x25519_dalek::StaticSecret::new(&mut OsRng))
+        PrivateKey(x25519_dalek::StaticSecret::new(OsRng))
     }
 
     /// Generate public key from private key
@@ -153,7 +128,7 @@ impl fmt::Debug for PrivateKey {
 
 impl fmt::Display for PrivateKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", &base64::encode(&(self.0).to_bytes()))
+        write!(f, "{}", &base64::encode((self.0).to_bytes()))
     }
 }
 
@@ -260,37 +235,28 @@ impl fmt::Display for PublicKey {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PresharedKey([u8; 32]);
+/// A WireGuard preshared key (PSK). Used to make the tunnel quantum-resistant.
+#[derive(Clone, PartialEq, Eq, Hash, Zeroize, ZeroizeOnDrop)]
+pub struct PresharedKey(Box<[u8; 32]>);
 
 impl PresharedKey {
-    /// Get the PSK as bytes
+    /// Get the PSK as bytes. Try to move or dereference this data as little as possible,
+    /// since copying it to more memory locations potentially leaves the secret in more memory
+    /// locations.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
-impl From<[u8; 32]> for PresharedKey {
-    fn from(key: [u8; 32]) -> PresharedKey {
+impl From<Box<[u8; 32]>> for PresharedKey {
+    fn from(key: Box<[u8; 32]>) -> PresharedKey {
         PresharedKey(key)
     }
 }
 
-impl Serialize for PresharedKey {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serialize_key(&self.0, serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for PresharedKey {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserialize_key(deserializer)
+impl fmt::Debug for PresharedKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", &base64::encode(self.as_bytes()))
     }
 }
 
@@ -298,7 +264,7 @@ fn serialize_key<S>(key: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    serializer.serialize_str(&base64::encode(&key))
+    serializer.serialize_str(&base64::encode(key))
 }
 
 fn deserialize_key<'de, D, K>(deserializer: D) -> Result<K, D::Error>
@@ -309,7 +275,7 @@ where
     use serde::de::Error;
 
     String::deserialize(deserializer)
-        .and_then(|string| base64::decode(&string).map_err(|err| Error::custom(err.to_string())))
+        .and_then(|string| base64::decode(string).map_err(|err| Error::custom(err.to_string())))
         .and_then(|buffer| {
             let mut key = [0u8; 32];
             if buffer.len() != 32 {

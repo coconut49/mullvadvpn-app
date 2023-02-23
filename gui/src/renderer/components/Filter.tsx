@@ -5,9 +5,13 @@ import { colors } from '../../config.json';
 import { Ownership } from '../../shared/daemon-rpc-types';
 import { messages } from '../../shared/gettext';
 import { useAppContext } from '../context';
-import filterLocations from '../lib/filter-locations';
+import {
+  EndpointType,
+  filterLocations,
+  filterLocationsByEndPointType,
+} from '../lib/filter-locations';
 import { useHistory } from '../lib/history';
-import { useBoolean } from '../lib/utilityHooks';
+import { useBoolean, useNormalRelaySettings } from '../lib/utilityHooks';
 import { IRelayLocationRedux } from '../redux/settings/reducers';
 import { IReduxState, useSelector } from '../redux/store';
 import Accordion from './Accordion';
@@ -18,7 +22,7 @@ import Selector from './cell/Selector';
 import { normalText } from './common-styles';
 import ImageView from './ImageView';
 import { BackAction } from './KeyboardNavigation';
-import { Layout, SettingsContainer } from './Layout';
+import { Footer, Layout, SettingsContainer } from './Layout';
 import {
   NavigationBar,
   NavigationContainer,
@@ -30,12 +34,6 @@ import {
 const StyledNavigationScrollbars = styled(NavigationScrollbars)({
   backgroundColor: colors.darkBlue,
   flex: 1,
-});
-
-const StyledFooter = styled.div({
-  display: 'flex',
-  flexDirection: 'column',
-  padding: '18px 22px 22px',
 });
 
 export default function Filter() {
@@ -101,13 +99,13 @@ export default function Filter() {
                 setProviders={setProviders}
               />
             </StyledNavigationScrollbars>
-            <StyledFooter>
+            <Footer>
               <AppButton.GreenButton
                 disabled={Object.values(providers).every((provider) => !provider)}
                 onClick={onApply}>
                 {messages.gettext('Apply')}
               </AppButton.GreenButton>
-            </StyledFooter>
+            </Footer>
           </NavigationContainer>
         </SettingsContainer>
       </Layout>
@@ -117,20 +115,31 @@ export default function Filter() {
 
 // Returns only the options for each filter that are compatible with current filter selection.
 function useFilteredFilters(providers: string[], ownership: Ownership) {
-  const locations = useSelector((state) =>
-    state.settings.relayLocations.concat(
-      state.settings.bridgeState === 'on' ? state.settings.bridgeLocations : [],
-    ),
-  );
+  const relaySettings = useNormalRelaySettings();
+  const bridgeState = useSelector((state) => state.settings.bridgeState);
+  const locations = useSelector((state) => state.settings.relayLocations);
+
+  const endpointType = bridgeState === 'on' ? EndpointType.any : EndpointType.exit;
 
   const availableProviders = useMemo(() => {
-    const filteredRelays = filterLocations(locations, [], ownership);
-    return providersFromRelays(filteredRelays);
+    const relayListForEndpointType = filterLocationsByEndPointType(
+      locations,
+      endpointType,
+      relaySettings,
+    );
+    const relaylistForFilters = filterLocations(relayListForEndpointType, ownership, []);
+    return providersFromRelays(relaylistForFilters);
   }, [locations, ownership]);
 
   const availableOwnershipOptions = useMemo(() => {
-    const filteredRelays = filterLocations(locations, providers, Ownership.any);
-    const filteredRelayOwnership = filteredRelays.flatMap((country) =>
+    const relayListForEndpointType = filterLocationsByEndPointType(
+      locations,
+      endpointType,
+      relaySettings,
+    );
+    const relaylistForFilters = filterLocations(relayListForEndpointType, Ownership.any, providers);
+
+    const filteredRelayOwnership = relaylistForFilters.flatMap((country) =>
       country.cities.flatMap((city) => city.relays.map((relay) => relay.owned)),
     );
 
@@ -157,11 +166,15 @@ function providersFromRelays(relays: IRelayLocationRedux[]) {
 }
 
 function providersSelector(state: IReduxState): Record<string, boolean> {
-  const providerConstraint =
-    'normal' in state.settings.relaySettings ? state.settings.relaySettings.normal.providers : [];
+  const relaySettings =
+    'normal' in state.settings.relaySettings ? state.settings.relaySettings.normal : undefined;
+  const providerConstraint = relaySettings?.providers ?? [];
 
-  const relays = state.settings.relayLocations.concat(
-    state.settings.bridgeState === 'on' ? state.settings.bridgeLocations : [],
+  const endpointType = state.settings.bridgeState === 'on' ? EndpointType.any : EndpointType.exit;
+  const relays = filterLocationsByEndPointType(
+    state.settings.relayLocations,
+    endpointType,
+    relaySettings,
   );
   const providers = providersFromRelays(relays);
 
@@ -191,10 +204,6 @@ function FilterByOwnership(props: IFilterByOwnershipProps) {
     () =>
       [
         {
-          label: messages.gettext('Any'),
-          value: Ownership.any,
-        },
-        {
           label: messages.pgettext('filter-view', 'Mullvad owned only'),
           value: Ownership.mullvadOwned,
         },
@@ -220,7 +229,13 @@ function FilterByOwnership(props: IFilterByOwnershipProps) {
       </Cell.CellButton>
 
       <Accordion expanded={expanded}>
-        <StyledSelector values={values} value={props.ownership} onSelect={props.setOwnership} />
+        <StyledSelector
+          items={values}
+          value={props.ownership}
+          onSelect={props.setOwnership}
+          automaticLabel={messages.gettext('Any')}
+          automaticValue={Ownership.any}
+        />
       </Accordion>
     </AriaInputGroup>
   );
@@ -279,14 +294,6 @@ interface IStyledRowTitleProps {
   bold?: boolean;
 }
 
-const StyledRow = styled.div({
-  display: 'flex',
-  height: '44px',
-  alignItems: 'center',
-  padding: '0 22px',
-  backgroundColor: colors.blue,
-});
-
 const StyledCheckbox = styled.div({
   width: '24px',
   height: '24px',
@@ -295,6 +302,13 @@ const StyledCheckbox = styled.div({
   justifyContent: 'center',
   backgroundColor: colors.white,
   borderRadius: '4px',
+});
+
+const StyledRow = styled(Cell.Row)({
+  backgroundColor: colors.blue40,
+  ':hover': {
+    backgroundColor: colors.blue80,
+  },
 });
 
 const StyledRowTitle = styled.label(normalText, (props: IStyledRowTitleProps) => ({

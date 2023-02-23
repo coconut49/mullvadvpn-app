@@ -5,10 +5,7 @@ use super::{
 };
 use crate::{
     firewall::FirewallPolicy,
-    routing::RouteManager,
-    tunnel::{
-        self, tun_provider::TunProvider, TunnelArgs, TunnelEvent, TunnelMetadata, TunnelMonitor,
-    },
+    tunnel::{self, TunnelMonitor},
 };
 use cfg_if::cfg_if;
 use futures::{
@@ -22,17 +19,16 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use talpid_routing::RouteManager;
+use talpid_tunnel::{tun_provider::TunProvider, TunnelArgs, TunnelEvent, TunnelMetadata};
 use talpid_types::{
     net::{AllowedTunnelTraffic, TunnelParameters},
     tunnel::{ErrorStateCause, FirewallPolicyError},
     ErrorExt,
 };
 
-#[cfg(windows)]
-use crate::{routing, winnet};
-
 #[cfg(target_os = "android")]
-use crate::tunnel::tun_provider;
+use talpid_tunnel::tun_provider;
 
 use super::connected_state::TunnelEventsReceiver;
 
@@ -42,7 +38,9 @@ pub(crate) type TunnelCloseEvent = Fuse<oneshot::Receiver<Option<ErrorStateCause
 const MAX_ATTEMPTS_WITH_SAME_TUN: u32 = 5;
 const MIN_TUNNEL_ALIVE_TIME: Duration = Duration::from_millis(1000);
 #[cfg(target_os = "windows")]
-const MAX_ADAPTER_FAIL_RETRIES: u32 = 4;
+const MAX_RECOVERABLE_FAIL_RETRIES: u32 = 4;
+
+const INITIAL_ALLOWED_TUNNEL_TRAFFIC: AllowedTunnelTraffic = AllowedTunnelTraffic::None;
 
 /// The tunnel has been started, but it is not established/functional.
 pub struct ConnectingState {
@@ -175,16 +173,16 @@ impl ConnectingState {
                         tunnel::Error::EnableIpv6Error => ErrorStateCause::Ipv6Unavailable,
                         #[cfg(target_os = "android")]
                         tunnel::Error::WireguardTunnelMonitoringError(
-                            tunnel::wireguard::Error::TunnelError(
-                                tunnel::wireguard::TunnelError::SetupTunnelDeviceError(
+                            talpid_wireguard::Error::TunnelError(
+                                talpid_wireguard::TunnelError::SetupTunnelDeviceError(
                                     tun_provider::Error::PermissionDenied,
                                 ),
                             ),
                         ) => ErrorStateCause::VpnPermissionDenied,
                         #[cfg(target_os = "android")]
                         tunnel::Error::WireguardTunnelMonitoringError(
-                            tunnel::wireguard::Error::TunnelError(
-                                tunnel::wireguard::TunnelError::SetupTunnelDeviceError(
+                            talpid_wireguard::Error::TunnelError(
+                                talpid_wireguard::TunnelError::SetupTunnelDeviceError(
                                     tun_provider::Error::InvalidDnsServers(addresses),
                                 ),
                             ),
@@ -212,7 +210,7 @@ impl ConnectingState {
             tunnel_events: event_rx.fuse(),
             tunnel_parameters: parameters,
             tunnel_metadata: None,
-            allowed_tunnel_traffic: AllowedTunnelTraffic::None,
+            allowed_tunnel_traffic: INITIAL_ALLOWED_TUNNEL_TRAFFIC,
             tunnel_close_event: tunnel_close_event_rx.fuse(),
             tunnel_close_tx,
             retry_attempt,
@@ -227,7 +225,7 @@ impl ConnectingState {
             Ok(_) => None,
             Err(error) => match error {
                 tunnel::Error::WireguardTunnelMonitoringError(
-                    tunnel::wireguard::Error::TimeoutError,
+                    talpid_wireguard::Error::TimeoutError,
                 ) => {
                     log::debug!("WireGuard tunnel timed out");
                     None
@@ -445,7 +443,15 @@ impl ConnectingState {
                 shared_values,
                 self.into_connected_state_bootstrap(metadata),
             )),
-            Some((TunnelEvent::Down, _)) => SameState(self.into()),
+            Some((TunnelEvent::Down, _)) => {
+                // It is important to reset this before the tunnel device is down,
+                // or else commands that reapply the firewall rules will fail since
+                // they refer to a non-existent device.
+                self.allowed_tunnel_traffic = INITIAL_ALLOWED_TUNNEL_TRAFFIC;
+                self.tunnel_metadata = None;
+
+                SameState(self.into())
+            }
             None => {
                 // The channel was closed
                 log::debug!("The tunnel disconnected unexpectedly");
@@ -481,12 +487,12 @@ impl ConnectingState {
 
 #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 fn should_retry(error: &tunnel::Error, retry_attempt: u32) -> bool {
-    #[cfg(windows)]
-    use tunnel::openvpn;
-    use tunnel::wireguard::{Error, TunnelError};
+    use talpid_wireguard::{Error, TunnelError};
 
     match error {
         tunnel::Error::WireguardTunnelMonitoringError(Error::CreateObfuscatorError(_)) => true,
+
+        tunnel::Error::WireguardTunnelMonitoringError(Error::ObfuscatorError(_)) => true,
 
         tunnel::Error::WireguardTunnelMonitoringError(Error::PskNegotiationError(
             talpid_tunnel_config_client::Error::GrpcConnectError(_),
@@ -509,27 +515,23 @@ fn should_retry(error: &tunnel::Error, retry_attempt: u32) -> bool {
 
         #[cfg(windows)]
         tunnel::Error::WireguardTunnelMonitoringError(Error::TunnelError(
+            // This usually occurs when the tunnel interface cannot be created.
             TunnelError::RecoverableStartWireguardError,
-        )) if retry_attempt < MAX_ADAPTER_FAIL_RETRIES => true,
+        )) if retry_attempt < MAX_RECOVERABLE_FAIL_RETRIES => true,
 
         #[cfg(windows)]
-        tunnel::Error::OpenVpnTunnelMonitoringError(openvpn::Error::WintunCreateAdapterError(
-            _,
-        )) if retry_attempt < MAX_ADAPTER_FAIL_RETRIES => true,
+        tunnel::Error::OpenVpnTunnelMonitoringError(
+            talpid_openvpn::Error::WintunCreateAdapterError(_),
+        ) if retry_attempt < MAX_RECOVERABLE_FAIL_RETRIES => true,
 
         _ => false,
     }
 }
 
 #[cfg(windows)]
-fn is_recoverable_routing_error(error: &crate::routing::Error) -> bool {
+fn is_recoverable_routing_error(error: &talpid_routing::Error) -> bool {
     match error {
-        routing::Error::AddRoutesFailed(route_error) => match route_error {
-            winnet::Error::GetDefaultRoute
-            | winnet::Error::GetDeviceByName
-            | winnet::Error::GetDeviceByGateway => true,
-            _ => false,
-        },
+        talpid_routing::Error::AddRoutesFailed(_) => true,
         _ => false,
     }
 }

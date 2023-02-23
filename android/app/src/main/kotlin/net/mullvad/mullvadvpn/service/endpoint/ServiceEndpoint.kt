@@ -1,7 +1,6 @@
 package net.mullvad.mullvadvpn.service.endpoint
 
 import android.content.Context
-import android.os.DeadObjectException
 import android.os.Looper
 import android.os.Messenger
 import kotlinx.coroutines.Dispatchers
@@ -10,14 +9,17 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.actor
-import kotlinx.coroutines.channels.sendBlocking
+import kotlinx.coroutines.channels.trySendBlocking
 import net.mullvad.mullvadvpn.ipc.DispatchingHandler
 import net.mullvad.mullvadvpn.ipc.Event
 import net.mullvad.mullvadvpn.ipc.Request
 import net.mullvad.mullvadvpn.service.MullvadDaemon
 import net.mullvad.mullvadvpn.service.persistence.SplitTunnelingPersistence
 import net.mullvad.mullvadvpn.util.Intermittent
+import net.mullvad.mullvadvpn.util.trySendEvent
 import net.mullvad.talpid.ConnectivityListener
+
+const val SHOULD_LOG_DEAD_OBJECT_EXCEPTION = true
 
 class ServiceEndpoint(
     looper: Looper,
@@ -62,11 +64,11 @@ class ServiceEndpoint(
     init {
         dispatcher.apply {
             registerHandler(Request.RegisterListener::class) { request ->
-                commands.sendBlocking(Command.RegisterListener(request.listener))
+                commands.trySendBlocking(Command.RegisterListener(request.listener))
             }
 
             registerHandler(Request.UnregisterListener::class) { request ->
-                commands.sendBlocking(Command.UnregisterListener(request.listenerId))
+                commands.trySendBlocking(Command.UnregisterListener(request.listenerId))
             }
         }
     }
@@ -93,13 +95,14 @@ class ServiceEndpoint(
             val deadListeners = mutableSetOf<Int>()
 
             for ((id, listener) in listeners) {
-                try {
-                    listener.send(event.message)
-                } catch (_: DeadObjectException) {
+                if (!listener.trySendEvent(
+                        event,
+                        SHOULD_LOG_DEAD_OBJECT_EXCEPTION
+                    )
+                ) {
                     deadListeners.add(id)
                 }
             }
-
             deadListeners.forEach { listeners.remove(it) }
         }
     }
@@ -147,8 +150,14 @@ class ServiceEndpoint(
                 initialEvents.add(Event.VpnPermissionRequest)
             }
 
-            initialEvents.forEach { event ->
-                listener.send(event.message)
+            val didSuccessfullySendAllMessages = initialEvents.all { event ->
+                listener.trySendEvent(
+                    event,
+                    SHOULD_LOG_DEAD_OBJECT_EXCEPTION
+                )
+            }
+            if (didSuccessfullySendAllMessages.not()) {
+                listeners.remove(listenerId)
             }
         }
     }

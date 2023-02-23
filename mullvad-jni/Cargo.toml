@@ -1,11 +1,15 @@
 [package]
 name = "mullvad-jni"
-version = "0.1.0"
+version = "0.0.0"
 authors = ["Mullvad VPN"]
 description = "JNI interface for the Mullvad daemon"
 license = "GPL-3.0"
 edition = "2021"
 publish = false
+
+[features]
+# Allow the API server to use to be configured
+api-override = ["mullvad-api/api-override"]
 
 [lib]
 crate_type = ["cdylib"]
@@ -14,7 +18,7 @@ crate_type = ["cdylib"]
 err-derive = "0.3.1"
 futures = "0.3"
 ipnetwork = "0.16"
-jnix = { version = "0.4", features = ["derive"] }
+jnix = { version = "0.5", features = ["derive"] }
 lazy_static = "1"
 log = "0.4"
 log-panics = "2"
@@ -28,4 +32,5 @@ mullvad-problem-report = { path = "../mullvad-problem-report" }
 mullvad-types = { path = "../mullvad-types" }
 mullvad-api = { path = "../mullvad-api" }
 talpid-core = { path = "../talpid-core" }
+talpid-tunnel = { path = "../talpid-tunnel" }
 talpid-types = { path = "../talpid-types" }

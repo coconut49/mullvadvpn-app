@@ -18,7 +18,6 @@ service ManagementService {
 	// Control the daemon and receive events
 	rpc EventsListen(google.protobuf.Empty) returns (stream DaemonEvent) {}
 	rpc PrepareRestart(google.protobuf.Empty) returns (google.protobuf.Empty) {}
-	rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 	rpc FactoryReset(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 
 	rpc GetCurrentVersion(google.protobuf.Empty) returns (google.protobuf.StringValue) {}
@@ -44,7 +43,7 @@ service ManagementService {
 	rpc SetOpenvpnMssfix(google.protobuf.UInt32Value) returns (google.protobuf.Empty) {}
 	rpc SetWireguardMtu(google.protobuf.UInt32Value) returns (google.protobuf.Empty) {}
 	rpc SetEnableIpv6(google.protobuf.BoolValue) returns (google.protobuf.Empty) {}
-	rpc SetQuantumResistantTunnel(google.protobuf.BoolValue) returns (google.protobuf.Empty) {}
+	rpc SetQuantumResistantTunnel(QuantumResistantState) returns (google.protobuf.Empty) {}
 	rpc SetDnsOptions(DnsOptions) returns (google.protobuf.Empty) {}
 
 	// Account management
@@ -127,6 +126,13 @@ message ErrorState {
 		SPLIT_TUNNEL_ERROR = 8;
 	}
 
+	enum AuthFailedError {
+		UNKNOWN = 0;
+		INVALID_ACCOUNT = 1;
+		EXPIRED_ACCOUNT = 2;
+		TOO_MANY_CONNECTIONS = 3;
+	}
+
 	enum GenerationError {
 		NO_MATCHING_RELAY = 0;
 		NO_MATCHING_BRIDGE_RELAY = 1;
@@ -150,7 +156,7 @@ message ErrorState {
 	FirewallPolicyError blocking_error = 2;
 
 	// AUTH_FAILED
-	string auth_fail_reason = 3;
+	AuthFailedError auth_failed_error = 3;
 	// TUNNEL_PARAMETER_ERROR
 	GenerationError parameter_error = 4;
 	// SET_FIREWALL_POLICY_ERROR
@@ -431,6 +437,15 @@ message ConnectionConfig {
 	}
 }
 
+message QuantumResistantState {
+	enum State {
+		AUTO = 0;
+		ON = 1;
+		OFF = 2;
+	}
+	State state = 1;
+}
+
 message TunnelOptions {
 	message OpenvpnOptions {
 		uint32 mssfix = 1;
@@ -439,7 +454,7 @@ message TunnelOptions {
 		uint32 mtu = 1;
 		google.protobuf.Duration rotation_interval = 2;
 		bool use_wireguard_nt = 3;
-		bool use_pq_safe_psk = 4;
+		QuantumResistantState quantum_resistant = 4;
 	}
 	message GenericOptions {
 		bool enable_ipv6 = 1;

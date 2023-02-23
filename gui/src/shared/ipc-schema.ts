@@ -13,7 +13,7 @@ import {
   IDeviceRemoval,
   IDnsOptions,
   ILocation,
-  IRelayList,
+  IRelayListWithEndpointData,
   ISettings,
   ObfuscationSettings,
   RelaySettingsUpdate,
@@ -33,18 +33,12 @@ import {
   ICurrentAppVersionInfo,
   IHistoryObject,
   IWindowShapeParameters,
-  ScrollPositions,
 } from './ipc-types';
 
 export interface ITranslations {
   locale: string;
   messages?: GetTextTranslations;
   relayLocations?: GetTextTranslations;
-}
-
-export interface IRelayListPair {
-  relays: IRelayList;
-  bridges: IRelayList;
 }
 
 export type LaunchApplicationResult = { success: true } | { error: string };
@@ -63,8 +57,9 @@ export interface IAppStateSnapshot {
   tunnelState: TunnelState;
   settings: ISettings;
   isPerformingPostUpgrade: boolean;
+  daemonAllowed?: boolean;
   deviceState?: DeviceState;
-  relayListPair: IRelayListPair;
+  relayList?: IRelayListWithEndpointData;
   currentVersion: ICurrentAppVersionInfo;
   upgradeVersion: IAppVersionInfo;
   guiSettings: IGuiSettingsState;
@@ -74,7 +69,6 @@ export interface IAppStateSnapshot {
   changelog: IChangelog;
   forceShowChanges: boolean;
   navigationHistory?: IHistoryObject;
-  scrollPositions: ScrollPositions;
 }
 
 // The different types of requests are:
@@ -128,15 +122,15 @@ export const ipcSchema = {
   navigation: {
     reset: notifyRenderer<void>(),
     setHistory: send<IHistoryObject>(),
-    setScrollPositions: send<ScrollPositions>(),
   },
   daemon: {
     isPerformingPostUpgrade: notifyRenderer<boolean>(),
+    daemonAllowed: notifyRenderer<boolean>(),
     connected: notifyRenderer<void>(),
     disconnected: notifyRenderer<void>(),
   },
   relays: {
-    '': notifyRenderer<IRelayListPair>(),
+    '': notifyRenderer<IRelayListWithEndpointData>(),
   },
   currentVersion: {
     '': notifyRenderer<ICurrentAppVersionInfo>(),
@@ -149,6 +143,7 @@ export const ipcSchema = {
     quit: send<void>(),
     openUrl: invoke<string, void>(),
     showOpenDialog: invoke<Electron.OpenDialogOptions, Electron.OpenDialogReturnValue>(),
+    showLaunchDaemonSettings: invoke<void, void>(),
   },
   location: {
     get: invoke<void, ILocation>(),
@@ -168,6 +163,7 @@ export const ipcSchema = {
     setBridgeState: invoke<BridgeState, void>(),
     setOpenVpnMssfix: invoke<number | undefined, void>(),
     setWireguardMtu: invoke<number | undefined, void>(),
+    setWireguardQuantumResistant: invoke<boolean | undefined, void>(),
     updateRelaySettings: invoke<RelaySettingsUpdate, void>(),
     updateBridgeSettings: invoke<BridgeSettings, void>(),
     setDnsOptions: invoke<IDnsOptions, void>(),

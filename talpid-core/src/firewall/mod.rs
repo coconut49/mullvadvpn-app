@@ -44,8 +44,8 @@ lazy_static! {
         IpNetwork::V4(Ipv4Network::new(Ipv4Addr::new(255, 255, 255, 255), 32).unwrap()),
         // Local subnetwork multicast. Not routable
         IpNetwork::V4(Ipv4Network::new(Ipv4Addr::new(224, 0, 0, 0), 24).unwrap()),
-        // Local scope (mDNS and SSDP) address
-        IpNetwork::V4(Ipv4Network::new(Ipv4Addr::new(239, 255, 0, 0), 16).unwrap()),
+        // Admin-local IPv4 multicast.
+        IpNetwork::V4(Ipv4Network::new(Ipv4Addr::new(239, 0, 0, 0), 8).unwrap()),
         // Interface-local IPv6 multicast.
         IpNetwork::V6(Ipv6Network::new(Ipv6Addr::new(0xff01, 0, 0, 0, 0, 0, 0, 0), 16).unwrap()),
         // Link-local IPv6 multicast. IPv6 equivalent of 224.0.0.0/24
@@ -85,7 +85,7 @@ const ROOT_UID: u32 = 0;
 /// Returns whether an address belongs to a private subnet.
 pub fn is_local_address(address: &IpAddr) -> bool {
     let address = *address;
-    (&*ALLOWED_LAN_NETS)
+    (*ALLOWED_LAN_NETS)
         .iter()
         .chain(&*LOOPBACK_NETS)
         .any(|net| net.contains(address))
@@ -137,7 +137,7 @@ pub enum FirewallPolicy {
         /// Flag setting if communication with LAN networks should be possible.
         allow_lan: bool,
         /// Host that should be reachable while in the blocked state.
-        allowed_endpoint: AllowedEndpoint,
+        allowed_endpoint: Option<AllowedEndpoint>,
         /// Desination port for DNS traffic redirection. Traffic destined to `127.0.0.1:53` will be
         /// redirected to `127.0.0.1:$dns_redirect_port`.
         #[cfg(target_os = "macos")]
@@ -210,9 +210,12 @@ impl fmt::Display for FirewallPolicy {
                 ..
             } => write!(
                 f,
-                "Blocked. {} LAN. Allowing endpoint {}",
+                "Blocked. {} LAN. Allowing endpoint: {}",
                 if *allow_lan { "Allowing" } else { "Blocking" },
-                allowed_endpoint,
+                allowed_endpoint
+                    .as_ref()
+                    .map(|endpoint| -> &dyn std::fmt::Display { endpoint })
+                    .unwrap_or(&"none"),
             ),
         }
     }
@@ -230,6 +233,10 @@ pub struct FirewallArguments {
     pub initial_state: InitialFirewallState,
     /// This argument is required for the blocked state to configure the firewall correctly.
     pub allow_lan: bool,
+    /// Specifies the firewall mark used to identify traffic that is allowed to be excluded from
+    /// the tunnel and _leaked_ during blocked states.
+    #[cfg(target_os = "linux")]
+    pub fwmark: u32,
 }
 
 /// State to enter during firewall init.
@@ -249,9 +256,12 @@ impl Firewall {
     }
 
     /// Createsa new firewall instance.
-    pub fn new() -> Result<Self, Error> {
+    pub fn new(#[cfg(target_os = "linux")] fwmark: u32) -> Result<Self, Error> {
         Ok(Firewall {
-            inner: imp::Firewall::new()?,
+            inner: imp::Firewall::new(
+                #[cfg(target_os = "linux")]
+                fwmark,
+            )?,
         })
     }
 

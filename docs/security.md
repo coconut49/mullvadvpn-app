@@ -25,16 +25,30 @@ secure as possible with the limitations of the OS APIs.
 ### Android
 
 On Android, the only way an app can filter network traffic is essentially via the VPN service API.
-This API allows all traffic to and from the phone to flow though a third party app. This API is of
-course what the app uses for the tunnel itself as well, but apart from that it is also what the
-leak protection is built on.
+This API allows all traffic, except some [exempt by the system](#exempt-traffic), to and from the
+phone to flow though a third party app. This API is of course what the app uses for the tunnel
+itself as well, but apart from that it is also what the leak protection is built on.
 
 An app with permission to act as a VPN service can request to open a VPN tunnel on the device and
 provide a set of IP networks it would like to have routed via itself. Doing so and specifying
-the routes `0/0` and `::0/0` forces all traffic to go via the app. That is what this app does both
-when it has a VPN tunnel up, but also when in a state where it would like to block all network
-traffic. Such as the [connecting], [disconnecting] and [error] states. In these states, all
-packets are simply dropped.
+the routes `0/0` and `::0/0` forces all traffic, except some
+[exempt by the system](#exempt-traffic), to go via the app. That is what this app does both when it
+has a VPN tunnel up, but also when in a state where it would like to block all network traffic. Such
+as the [connecting], [disconnecting] and [error] states. In these states, all outgoing packets are
+simply dropped, but incoming traffic is still allowed due to the limitations of Android.
+
+#### Exempt traffic
+
+Even though not being properly documented by Google, some traffic is exempt by the system from using
+the VPN, which means that the traffic will leak and therefore potentially impact user privacy. This
+applies even if *Block connections without VPN* is enabled. The exempt traffic includes:
+* Connectivity checks (DNS lookups and HTTP(S) connections)
+* Network provided time (NTP)
+
+The following issues have been reported by Mullvad in the Android issue tracker in order to improve
+documentation and user privacy:
+* [Incorrect VPN lockdown documentation](https://issuetracker.google.com/issues/249990229)
+* [Add option to disable connectivity checks when VPN lockdown is enabled](https://issuetracker.google.com/issues/250529027)
 
 ### iOS
 
@@ -81,15 +95,15 @@ The following network traffic is allowed or blocked independent of state:
      * `169.254.0.0/16` (Link-local IPv4 range)
      * `fe80::/10` (Link-local IPv6 range)
      * `fc00::/7` (Unique local address (ULA) range)
-   * Outgoing to any IP in a local, unroutable, multicast network, meaning these:
+   * Outgoing to any IP in globally unroutable multicast networks, meaning these:
      * `224.0.0.0/24` (Local subnet IPv4 multicast)
-     * `239.255.0.0/16` (IPv4 local scope. eg. SSDP and mDNS)
+     * `239.0.0.0/8` (Administratively scoped IPv4 multicast. E.g. SSDP and mDNS)
      * `255.255.255.255/32` (Broadcasts to the local network)
      * `ff01::/16` (Interface-local multicast. Local to a single interface on a node.)
      * `ff02::/16` (Link-local IPv6 multicast. IPv6 equivalent of `224.0.0.0/24`)
      * `ff03::/16` (Realm-local IPv6 multicast)
      * `ff04::/16` (Admin-local IPv6 multicast)
-     * `ff05::/16` (Site-local IPv6 multicast. Is routable, but should never leave the "site")
+     * `ff05::/16` (Site-local IPv6 multicast)
    * Incoming DHCPv4 requests and outgoing responses (be a DHCPv4 server):
      * Incoming UDP from `*:68` to `255.255.255.255:67`
      * Outgoing UDP from `*:67` to `*:68`
@@ -270,11 +284,19 @@ via unix domain sockets (UDS) on Linux and macOS and via named pipes on Windows.
 This management interface can be reached by any process running on the device.
 Locally running malicious programs are outside of the app's threat model.
 
-The service transitions to the [disconnected] state before exiting (i.e., normally when the OS is
-being shut down). In general, the last firewall policy is maintained when the service exits, and
-lost upon a reboot (except on Windows, see below). In other words, if the "Always require VPN"
-option is enabled, the blocking policy will be left intact when the daemon service stops.
-Otherwise, the system firewall will be reset to its original state.
+The `mullvad-daemon` transition to the [disconnected] state before exiting. To
+limit leaks during computer shutdown, it will maintain the blocking firewall
+rules upon exit in the following scenarios:
+- _Always require VPN_ is enabled
+- A user didn't explicitly request for the `mullvad-daemon` to be shut down and
+  either or both of the following are true
+    - The daemon is currently in one of the blocking states ([connected],
+      [connecting], or [error])
+    - _auto-connect_ is enabled
+
+In other cases, when the daemon process stops normally, firewall rules will be
+removed.
+
 
 ### Windows
 
@@ -284,6 +306,21 @@ the service has started back up again during boot, including before the BFE serv
 
 As with "Always require VPN", enabling "Auto-connect" in the service will cause it to
 enforce the blocking policy before being stopped.
+
+### Linux
+
+Due to the dependence on various other services, the `mullvad-daemon` is not
+started early enough to prevent leaks. To prevent this, another system unit is
+started during early boot that applies a blocking policy that persists until the
+`mullvad-daemon` is started.
+
+
+### macOS
+
+Due to the inability to specify dependencies of system services in `launchd` there is no way to
+ensure that our daemon is started before any other service  or program is started.  Thus, whilst our
+daemon will start as soon as it possibly can, there's nothing that can be done about the order in
+which launch daemons get started, so some leaks may still occur.
 
 ## Desktop Electron GUI
 

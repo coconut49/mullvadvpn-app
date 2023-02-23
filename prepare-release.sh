@@ -13,7 +13,6 @@ for argument in "$@"; do
     case "$argument" in
         "--android")
             ANDROID="true"
-            VERSION_METADATA_ARGS+="--android "
             ;;
         "--desktop")
             DESKTOP="true"
@@ -51,53 +50,44 @@ if [[ $DESKTOP == "true" && $(grep "CHANGE THIS BEFORE A RELEASE" gui/changes.tx
     exit 1
 fi
 
-if [[ $(grep "^## \\[$PRODUCT_VERSION\\] - " CHANGELOG.md) == "" ]]; then
+if [[ "$DESKTOP" == "true" && $(grep "^## \\[$PRODUCT_VERSION\\] - " CHANGELOG.md) == "" ]]; then
     echo "It looks like you did not add $PRODUCT_VERSION to the changelog?"
     echo "Please make sure the changelog is up to date and correct before you proceed."
     exit 1
 fi
 
-echo "Updating version in metadata files..."
-./version-metadata.sh inject $PRODUCT_VERSION $VERSION_METADATA_ARGS
-
-echo "Syncing Cargo.lock with new version numbers"
-source env.sh ""
-# If cargo exits with a non zero exit status and it's not a timeout (exit code 124) it's an error
-set +e
-timeout 5s cargo build
-if [[ $? != 0 && $? != 124 ]]; then
+if [[ "$ANDROID" == "true" && $(grep "^## \\[android/$PRODUCT_VERSION\\] - " CHANGELOG.md) == "" ]]; then
+    echo "It looks like you did not add $PRODUCT_VERSION to the changelog?"
+    echo "Please make sure the changelog is up to date and correct before you proceed."
     exit 1
 fi
-set -e
 
-echo "Commiting metadata changes to git..."
-git commit -S -m "Updating version in package files" \
-    gui/package.json \
-    gui/package-lock.json \
-    mullvad-daemon/Cargo.toml \
-    mullvad-cli/Cargo.toml \
-    mullvad-problem-report/Cargo.toml \
-    mullvad-setup/Cargo.toml \
-    mullvad-exclude/Cargo.toml \
-    talpid-openvpn-plugin/Cargo.toml \
-    Cargo.lock \
-    android/app/build.gradle.kts \
-    dist-assets/windows/version.h
+if [[ "$DESKTOP" == "true" ]]; then
+    echo "$PRODUCT_VERSION" > dist-assets/desktop-product-version.txt
+    git commit -S -m "Update desktop app version to $PRODUCT_VERSION" \
+        dist-assets/desktop-product-version.txt
+fi
 
-echo "Tagging current git commit with release tag $PRODUCT_VERSION..."
+if [[ "$ANDROID" == "true" ]]; then
+    echo "$PRODUCT_VERSION" > dist-assets/android-product-version.txt
+    git commit -S -m "Update android app version to $PRODUCT_VERSION" \
+        dist-assets/android-product-version.txt
+fi
 
 NEW_TAGS=""
 
 if [[ "$ANDROID" == "true" ]]; then
+    echo "Tagging current git commit with release tag android/$PRODUCT_VERSION..."
+
     git tag -s "android/$PRODUCT_VERSION" -m "android/$PRODUCT_VERSION"
     NEW_TAGS+=" android/$PRODUCT_VERSION"
 fi
 if [[ "$DESKTOP" == "true" ]]; then
+    echo "Tagging current git commit with release tag $PRODUCT_VERSION..."
+
     git tag -s $PRODUCT_VERSION -m $PRODUCT_VERSION
     NEW_TAGS+=" $PRODUCT_VERSION"
 fi
-
-./version-metadata.sh delete-backup
 
 echo "================================================="
 echo "| DONE preparing for a release!                 |"

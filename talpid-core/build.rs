@@ -1,12 +1,8 @@
-use std::{env, path::PathBuf};
-
 #[cfg(windows)]
 mod win {
-    use super::manifest_dir;
     use std::{env, path::PathBuf};
 
     pub static WINFW_BUILD_DIR: &'static str = "..\\windows\\winfw\\bin";
-    pub static WINNET_BUILD_DIR: &'static str = "..\\windows\\winnet\\bin";
 
     pub fn default_windows_build_artifact_dir(build_dir: &str) -> PathBuf {
         manifest_dir().join(build_dir).join(&target_platform_dir())
@@ -40,6 +36,12 @@ mod win {
         println!("cargo:rustc-link-search={}", lib_dir.display());
         println!("cargo:rustc-link-lib=dylib={}", lib_name);
     }
+
+    pub fn manifest_dir() -> PathBuf {
+        env::var("CARGO_MANIFEST_DIR")
+            .map(PathBuf::from)
+            .expect("CARGO_MANIFEST_DIR env var not set")
+    }
 }
 
 #[cfg(windows)]
@@ -49,9 +51,7 @@ fn main() {
     use crate::win::*;
 
     const WINFW_DIR_VAR: &str = "WINFW_LIB_DIR";
-    const WINNET_DIR_VAR: &str = "WINNET_LIB_DIR";
     declare_library(WINFW_DIR_VAR, WINFW_BUILD_DIR, "winfw");
-    declare_library(WINNET_DIR_VAR, WINNET_BUILD_DIR, "winnet");
     let lib_dir = manifest_dir().join("../build/lib/x86_64-pc-windows-msvc");
     println!("cargo:rustc-link-search={}", &lib_dir.display());
     println!("cargo:rustc-link-lib=dylib=libwg");
@@ -59,42 +59,11 @@ fn main() {
 
 #[cfg(not(windows))]
 fn main() {
-    generate_grpc_code();
-
-    let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
-
-    declare_libs_dir("../dist-assets/binaries");
-    declare_libs_dir("../build/lib");
-
-    let link_type = match target_os.as_str() {
-        "android" => "",
-        "linux" | "macos" => "=static",
-        // We would like to avoid panicing on windows even if we can not link correctly
-        // because we would like to be able to run check and clippy.
-        // This does not allow for correct linking or building.
-        "windows" => "",
-        _ => panic!("Unsupported platform: {}", target_os),
-    };
-
-    println!("cargo:rustc-link-lib{}=wg", link_type);
-}
-
-fn manifest_dir() -> PathBuf {
-    env::var("CARGO_MANIFEST_DIR")
-        .map(PathBuf::from)
-        .expect("CARGO_MANIFEST_DIR env var not set")
-}
-
-#[cfg(not(windows))]
-fn declare_libs_dir(base: &str) {
-    let target_triplet = env::var("TARGET").expect("TARGET is not set");
-    let lib_dir = manifest_dir().join(base).join(target_triplet);
-    println!("cargo:rerun-if-changed={}", lib_dir.display());
-    println!("cargo:rustc-link-search={}", lib_dir.display());
+    generate_grpc_code()
 }
 
 fn generate_grpc_code() {
     const PROTO_FILE: &str = "../talpid-openvpn-plugin/proto/openvpn_plugin.proto";
     tonic_build::compile_protos(PROTO_FILE).unwrap();
-    println!("cargo:rerun-if-changed={}", PROTO_FILE);
+    println!("cargo:rerun-if-changed={PROTO_FILE}");
 }

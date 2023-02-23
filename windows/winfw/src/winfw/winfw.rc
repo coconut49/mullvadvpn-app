@@ -1,4 +1,4 @@
-#include "../../../../dist-assets/windows/version.h"
+#include "../../../version.h"
 
 1 VERSIONINFO
 FILEVERSION     MAJOR_VERSION,MINOR_VERSION,PATCH_VERSION,0
@@ -12,7 +12,7 @@ BEGIN
         VALUE "FileDescription", "Mullvad VPN firewall module"
         VALUE "FileVersion", PRODUCT_VERSION
         VALUE "InternalName", "winfw"
-        VALUE "LegalCopyright", "(c) 2022 Mullvad VPN AB"
+        VALUE "LegalCopyright", "(c) 2023 Mullvad VPN AB"
         VALUE "OriginalFilename", "winfw.dll"
         VALUE "ProductName", "Mullvad VPN"
         VALUE "ProductVersion", PRODUCT_VERSION

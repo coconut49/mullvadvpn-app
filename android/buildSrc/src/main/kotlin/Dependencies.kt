@@ -6,6 +6,7 @@ object Dependencies {
     const val junit = "junit:junit:${Versions.junit}"
     const val leakCanary = "com.squareup.leakcanary:leakcanary-android:${Versions.leakCanary}"
     const val turbine = "app.cash.turbine:turbine:${Versions.turbine}"
+    const val mockkWebserver = "com.squareup.okhttp3:mockwebserver:${Versions.mockWebserver}"
 
     object AndroidX {
         const val appcompat = "androidx.appcompat:appcompat:${Versions.AndroidX.appcompat}"
@@ -29,28 +30,34 @@ object Dependencies {
             "androidx.test.espresso:espresso-contrib:${Versions.AndroidX.espresso}"
         const val testCore =
             "androidx.test:core:${Versions.AndroidX.test}"
+        const val testMonitor =
+            "androidx.test:monitor:${Versions.AndroidX.testMonitor}"
         const val testRunner =
-            "androidx.test:runner:${Versions.AndroidX.test}"
+            "androidx.test:runner:${Versions.AndroidX.testRunner}"
         const val testRules =
             "androidx.test:rules:${Versions.AndroidX.test}"
         const val testUiAutomator =
             "androidx.test.uiautomator:uiautomator:${Versions.AndroidX.uiautomator}"
         const val testOrchestrator =
-            "androidx.test:orchestrator:${Versions.AndroidX.test}"
+            "androidx.test:orchestrator:${Versions.AndroidX.testOrchestrator}"
     }
 
     object Compose {
         const val constrainLayout =
             "androidx.constraintlayout:constraintlayout-compose:${Versions.Compose.constrainLayout}"
-        const val foundation = "androidx.compose.foundation:foundation:${Versions.Compose.base}"
+        const val foundation =
+            "androidx.compose.foundation:foundation:${Versions.Compose.foundation}"
         const val junit = "androidx.compose.ui:ui-test-junit4:${Versions.Compose.base}"
         const val viewModelLifecycle =
             "androidx.lifecycle:lifecycle-viewmodel-compose:${Versions.Compose.viewModelLifecycle}"
-        const val material = "androidx.compose.material:material:${Versions.Compose.base}"
+        const val material = "androidx.compose.material:material:${Versions.Compose.material}"
         const val testManifest = "androidx.compose.ui:ui-test-manifest:${Versions.Compose.base}"
         const val uiController =
             "com.google.accompanist:accompanist-systemuicontroller:${Versions.Compose.uiController}"
         const val ui = "androidx.compose.ui:ui:${Versions.Compose.base}"
+        const val uiTooling = "androidx.compose.ui:ui-tooling:${Versions.Compose.base}"
+        const val uiToolingPreview =
+            "androidx.compose.ui:ui-tooling-preview:${Versions.Compose.base}"
     }
 
     object Koin {
@@ -80,14 +87,23 @@ object Dependencies {
         const val android = "io.mockk:mockk-android:${Versions.mockk}"
     }
 
+    object Mullvad {
+        const val endpointLib = ":lib:endpoint"
+    }
+
     object Plugin {
+        const val aaptLinux = "com.android.tools.build:aapt2:${Versions.Plugin.androidAapt}:linux"
+        const val aaptOsx = "com.android.tools.build:aapt2:${Versions.Plugin.androidAapt}:osx"
+        const val aaptWindows =
+            "com.android.tools.build:aapt2:${Versions.Plugin.androidAapt}:windows"
         const val android = "com.android.tools.build:gradle:${Versions.Plugin.android}"
         const val androidApplicationId = "com.android.application"
+        const val androidLibraryId = "com.android.library"
         const val androidTestId = "com.android.test"
         const val playPublisher =
             "com.github.triplet.gradle:play-publisher:${Versions.Plugin.playPublisher}"
         const val playPublisherId = "com.github.triplet.play"
-        const val kotlin = "org.jetbrains.kotlin:kotlin-gradle-plugin:${Versions.Plugin.kotlin}"
+        const val kotlin = "org.jetbrains.kotlin:kotlin-gradle-plugin:${Versions.kotlin}"
         const val kotlinAndroidId = "kotlin-android"
         const val kotlinParcelizeId = "kotlin-parcelize"
         const val dependencyCheck =

@@ -10,6 +10,7 @@ import { promisify } from 'util';
 import {
   AccountToken,
   AfterDisconnect,
+  AuthFailedError,
   BridgeSettings,
   BridgeState,
   ConnectionConfig,
@@ -18,27 +19,29 @@ import {
   DeviceEvent,
   DeviceState,
   EndpointObfuscationType,
+  ErrorState,
   ErrorStateCause,
   FirewallPolicyError,
+  FirewallPolicyErrorType,
   IAccountData,
   IAppVersionInfo,
   IBridgeConstraints,
   IDevice,
   IDeviceRemoval,
   IDnsOptions,
-  IErrorState,
   ILocation,
   IObfuscationEndpoint,
   IOpenVpnConstraints,
   IProxyEndpoint,
-  IRelayList,
   IRelayListCity,
   IRelayListCountry,
   IRelayListHostname,
+  IRelayListWithEndpointData,
   ISettings,
   ITunnelOptions,
   ITunnelStateRelayInfo,
   IWireguardConstraints,
+  IWireguardEndpointData,
   LoggedInDeviceState,
   LoggedOutDeviceState,
   ObfuscationSettings,
@@ -67,6 +70,9 @@ import {
 import { ManagementServiceClient } from './management_interface/management_interface_grpc_pb';
 import * as grpcTypes from './management_interface/management_interface_pb';
 
+const DAEMON_RPC_PATH =
+  process.platform === 'win32' ? 'unix:////./pipe/Mullvad VPN' : 'unix:///var/run/mullvad-vpn';
+
 const NETWORK_CALL_TIMEOUT = 10000;
 const CHANNEL_STATE_TIMEOUT = 1000 * 60 * 60;
 
@@ -77,7 +83,10 @@ const invalidErrorStateCause = new Error(
 );
 
 export class ConnectionObserver {
-  constructor(private openHandler: () => void, private closeHandler: (error?: Error) => void) {}
+  constructor(
+    private openHandler: () => void,
+    private closeHandler: (wasConnected: boolean, error?: Error) => void,
+  ) {}
 
   // Only meant to be called by DaemonRpc
   // @internal
@@ -87,8 +96,8 @@ export class ConnectionObserver {
 
   // Only meant to be called by DaemonRpc
   // @internal
-  public onClose = (error?: Error) => {
-    this.closeHandler(error);
+  public onClose = (wasConnected: boolean, error?: Error) => {
+    this.closeHandler(wasConnected, error);
   };
 }
 
@@ -127,30 +136,34 @@ type CallFunctionArgument<T, R> =
 
 export class DaemonRpc {
   private client: ManagementServiceClient;
-  private isConnected = false;
+  private isConnectedValue = false;
   private connectionObservers: ConnectionObserver[] = [];
   private nextSubscriptionId = 0;
   private subscriptions: Map<number, grpc.ClientReadableStream<grpcTypes.DaemonEvent>> = new Map();
   private reconnectionTimeout?: NodeJS.Timer;
 
-  constructor(connectionParams: string) {
+  constructor() {
     this.client = new ManagementServiceClient(
-      connectionParams,
+      DAEMON_RPC_PATH,
       grpc.credentials.createInsecure(),
       this.channelOptions(),
     );
+  }
+
+  public get isConnected() {
+    return this.isConnectedValue;
   }
 
   public connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.client.waitForReady(this.deadlineFromNow(), (error) => {
         if (error) {
-          this.connectionObservers.forEach((observer) => observer.onClose(error));
+          this.onClose(error);
           this.ensureConnectivity();
           reject(error);
         } else {
           this.reconnectionTimeout = undefined;
-          this.isConnected = true;
+          this.isConnectedValue = true;
           this.connectionObservers.forEach((observer) => observer.onOpen());
           this.setChannelCallback();
           resolve();
@@ -160,7 +173,7 @@ export class DaemonRpc {
   }
 
   public disconnect() {
-    this.isConnected = false;
+    this.isConnectedValue = false;
 
     for (const subscriptionId of this.subscriptions.keys()) {
       this.removeSubscription(subscriptionId);
@@ -248,7 +261,7 @@ export class DaemonRpc {
     }
   }
 
-  public async getRelayLocations(): Promise<IRelayList> {
+  public async getRelayLocations(): Promise<IRelayListWithEndpointData> {
     if (this.isConnected) {
       const response = await this.callEmpty<grpcTypes.RelayList>(this.client.getRelayLocations);
       return convertFromRelayList(response);
@@ -422,6 +435,25 @@ export class DaemonRpc {
 
   public async setWireguardMtu(mtu?: number): Promise<void> {
     await this.callNumber(this.client.setWireguardMtu, mtu);
+  }
+
+  public async setWireguardQuantumResistant(quantumResistant?: boolean): Promise<void> {
+    const quantumResistantState = new grpcTypes.QuantumResistantState();
+    switch (quantumResistant) {
+      case true:
+        quantumResistantState.setState(grpcTypes.QuantumResistantState.State.ON);
+        break;
+      case false:
+        quantumResistantState.setState(grpcTypes.QuantumResistantState.State.OFF);
+        break;
+      case undefined:
+        quantumResistantState.setState(grpcTypes.QuantumResistantState.State.AUTO);
+        break;
+    }
+    await this.call<grpcTypes.QuantumResistantState, Empty>(
+      this.client.setQuantumResistantTunnel,
+      quantumResistantState,
+    );
   }
 
   public async setAutoConnect(autoConnect: boolean): Promise<void> {
@@ -637,6 +669,13 @@ export class DaemonRpc {
     }
   }
 
+  private onClose(error?: Error) {
+    const wasConnected = this.isConnectedValue;
+    this.isConnectedValue = false;
+
+    this.connectionObservers.forEach((observer) => observer.onClose(wasConnected, error));
+  }
+
   private removeSubscription(id: number) {
     const subscription = this.subscriptions.get(id);
     if (subscription !== undefined) {
@@ -679,15 +718,14 @@ export class DaemonRpc {
       }
       const wasConnected = this.isConnected;
       if (this.channelDisconnected(currentState)) {
-        this.connectionObservers.forEach((observer) => observer.onClose());
-        this.isConnected = false;
+        this.onClose();
         // Try and reconnect in case
         void this.connect().catch((error) => {
           log.error(`Failed to reconnect - ${error}`);
         });
         this.setChannelCallback(currentState);
       } else if (!wasConnected && currentState === grpc.connectivityState.READY) {
-        this.isConnected = true;
+        this.isConnectedValue = true;
         this.connectionObservers.forEach((observer) => observer.onOpen());
         this.setChannelCallback(currentState);
       }
@@ -723,8 +761,7 @@ export class DaemonRpc {
     this.reconnectionTimeout = setTimeout(() => {
       const lastState = this.client.getChannel().getConnectivityState(true);
       if (this.channelDisconnected(lastState)) {
-        this.connectionObservers.forEach((observer) => observer.onClose());
-        this.isConnected = false;
+        this.onClose();
       }
       if (!this.isConnected) {
         void this.connect().catch((error) => {
@@ -742,13 +779,25 @@ function liftConstraint<T>(constraint: Constraint<T> | undefined): T | undefined
   return undefined;
 }
 
-function convertFromRelayList(relayList: grpcTypes.RelayList): IRelayList {
+function convertFromRelayList(relayList: grpcTypes.RelayList): IRelayListWithEndpointData {
   return {
-    countries: relayList
-      .getCountriesList()
-      .map((country: grpcTypes.RelayListCountry) =>
-        convertFromRelayListCountry(country.toObject()),
-      ),
+    relayList: {
+      countries: relayList
+        .getCountriesList()
+        .map((country: grpcTypes.RelayListCountry) =>
+          convertFromRelayListCountry(country.toObject()),
+        ),
+    },
+    wireguardEndpointData: convertWireguardEndpointData(relayList.getWireguard()!),
+  };
+}
+
+function convertWireguardEndpointData(
+  data: grpcTypes.WireguardEndpointData,
+): IWireguardEndpointData {
+  return {
+    portRanges: data.getPortRangesList().map((range) => [range.getFirst(), range.getLast()]),
+    udp2tcpPorts: data.getUdp2tcpPortsList(),
   };
 }
 
@@ -847,68 +896,101 @@ function convertFromTunnelState(tunnelState: grpcTypes.TunnelState): TunnelState
   }
 }
 
-function convertFromTunnelStateError(state: grpcTypes.ErrorState.AsObject): IErrorState {
-  return {
-    ...state,
-    cause: convertFromTunnelStateErrorCause(state.cause, state),
-    blockFailure: state.blockingError
-      ? convertFromFirewallPolicyError(state.blockingError)
-      : undefined,
+function convertFromTunnelStateError(state: grpcTypes.ErrorState.AsObject): ErrorState {
+  const baseError = {
+    blockingError: state.blockingError && convertFromBlockingError(state.blockingError),
   };
-}
 
-function convertFromTunnelStateErrorCause(
-  cause: grpcTypes.ErrorState.Cause,
-  state: grpcTypes.ErrorState.AsObject,
-): ErrorStateCause {
-  switch (cause) {
-    case grpcTypes.ErrorState.Cause.IS_OFFLINE:
-      return { reason: 'is_offline' };
-    case grpcTypes.ErrorState.Cause.SET_DNS_ERROR:
-      return { reason: 'set_dns_error' };
-    case grpcTypes.ErrorState.Cause.IPV6_UNAVAILABLE:
-      return { reason: 'ipv6_unavailable' };
-    case grpcTypes.ErrorState.Cause.START_TUNNEL_ERROR:
-      return { reason: 'start_tunnel_error' };
+  switch (state.cause) {
+    case grpcTypes.ErrorState.Cause.AUTH_FAILED:
+      return {
+        ...baseError,
+        cause: ErrorStateCause.authFailed,
+        authFailedError: convertFromAuthFailedError(state.authFailedError),
+      };
+    case grpcTypes.ErrorState.Cause.TUNNEL_PARAMETER_ERROR:
+      return {
+        ...baseError,
+        cause: ErrorStateCause.tunnelParameterError,
+        parameterError: convertFromParameterError(state.parameterError),
+      };
     case grpcTypes.ErrorState.Cause.SET_FIREWALL_POLICY_ERROR:
       return {
-        reason: 'set_firewall_policy_error',
-        details: convertFromFirewallPolicyError(state.policyError!),
+        ...baseError,
+        cause: ErrorStateCause.setFirewallPolicyError,
+        policyError: convertFromBlockingError(state.policyError!),
       };
-    case grpcTypes.ErrorState.Cause.AUTH_FAILED:
-      return { reason: 'auth_failed', details: state.authFailReason };
-    case grpcTypes.ErrorState.Cause.TUNNEL_PARAMETER_ERROR: {
-      const parameterErrorMap: Record<
-        grpcTypes.ErrorState.GenerationError,
-        TunnelParameterError
-      > = {
-        [grpcTypes.ErrorState.GenerationError.NO_MATCHING_RELAY]: 'no_matching_relay',
-        [grpcTypes.ErrorState.GenerationError.NO_MATCHING_BRIDGE_RELAY]: 'no_matching_bridge_relay',
-        [grpcTypes.ErrorState.GenerationError.NO_WIREGUARD_KEY]: 'no_wireguard_key',
-        [grpcTypes.ErrorState.GenerationError.CUSTOM_TUNNEL_HOST_RESOLUTION_ERROR]:
-          'custom_tunnel_host_resultion_error',
+
+    case grpcTypes.ErrorState.Cause.IS_OFFLINE:
+      return {
+        ...baseError,
+        cause: ErrorStateCause.isOffline,
       };
-      return { reason: 'tunnel_parameter_error', details: parameterErrorMap[state.parameterError] };
-    }
+    case grpcTypes.ErrorState.Cause.SET_DNS_ERROR:
+      return {
+        ...baseError,
+        cause: ErrorStateCause.setDnsError,
+      };
+    case grpcTypes.ErrorState.Cause.IPV6_UNAVAILABLE:
+      return {
+        ...baseError,
+        cause: ErrorStateCause.ipv6Unavailable,
+      };
+    case grpcTypes.ErrorState.Cause.START_TUNNEL_ERROR:
+      return {
+        ...baseError,
+        cause: ErrorStateCause.startTunnelError,
+      };
     case grpcTypes.ErrorState.Cause.SPLIT_TUNNEL_ERROR:
-      return { reason: 'split_tunnel_error' };
+      return {
+        ...baseError,
+        cause: ErrorStateCause.splitTunnelError,
+      };
     case grpcTypes.ErrorState.Cause.VPN_PERMISSION_DENIED:
       // VPN_PERMISSION_DENIED is only ever created on Android
       throw invalidErrorStateCause;
   }
 }
 
-function convertFromFirewallPolicyError(
+function convertFromBlockingError(
   error: grpcTypes.ErrorState.FirewallPolicyError.AsObject,
 ): FirewallPolicyError {
   switch (error.type) {
     case grpcTypes.ErrorState.FirewallPolicyError.ErrorType.GENERIC:
-      return { reason: 'generic' };
+      return { type: FirewallPolicyErrorType.generic };
     case grpcTypes.ErrorState.FirewallPolicyError.ErrorType.LOCKED: {
       const pid = error.lockPid;
       const name = error.lockName;
-      return { reason: 'locked', details: pid && name ? { pid, name } : undefined };
+      return { type: FirewallPolicyErrorType.locked, pid, name };
     }
+  }
+}
+
+function convertFromAuthFailedError(error: grpcTypes.ErrorState.AuthFailedError): AuthFailedError {
+  switch (error) {
+    case grpcTypes.ErrorState.AuthFailedError.UNKNOWN:
+      return AuthFailedError.unknown;
+    case grpcTypes.ErrorState.AuthFailedError.INVALID_ACCOUNT:
+      return AuthFailedError.invalidAccount;
+    case grpcTypes.ErrorState.AuthFailedError.EXPIRED_ACCOUNT:
+      return AuthFailedError.expiredAccount;
+    case grpcTypes.ErrorState.AuthFailedError.TOO_MANY_CONNECTIONS:
+      return AuthFailedError.tooManyConnections;
+  }
+}
+
+function convertFromParameterError(
+  error: grpcTypes.ErrorState.GenerationError,
+): TunnelParameterError {
+  switch (error) {
+    case grpcTypes.ErrorState.GenerationError.NO_MATCHING_RELAY:
+      return TunnelParameterError.noMatchingRelay;
+    case grpcTypes.ErrorState.GenerationError.NO_MATCHING_BRIDGE_RELAY:
+      return TunnelParameterError.noMatchingBridgeRelay;
+    case grpcTypes.ErrorState.GenerationError.NO_WIREGUARD_KEY:
+      return TunnelParameterError.noWireguardKey;
+    case grpcTypes.ErrorState.GenerationError.CUSTOM_TUNNEL_HOST_RESOLUTION_ERROR:
+      return TunnelParameterError.customTunnelHostResolutionError;
   }
 }
 
@@ -1167,6 +1249,9 @@ function convertFromTunnelOptions(tunnelOptions: grpcTypes.TunnelOptions.AsObjec
     },
     wireguard: {
       mtu: tunnelOptions.wireguard!.mtu,
+      quantumResistant: convertFromQuantumResistantState(
+        tunnelOptions.wireguard?.quantumResistant?.state,
+      ),
     },
     generic: {
       enableIpv6: tunnelOptions.generic!.enableIpv6,
@@ -1188,6 +1273,18 @@ function convertFromTunnelOptions(tunnelOptions: grpcTypes.TunnelOptions.AsObjec
       },
     },
   };
+}
+
+function convertFromQuantumResistantState(
+  state?: grpcTypes.QuantumResistantState.State,
+): boolean | undefined {
+  return state === undefined
+    ? undefined
+    : {
+        [grpcTypes.QuantumResistantState.State.ON]: true,
+        [grpcTypes.QuantumResistantState.State.OFF]: false,
+        [grpcTypes.QuantumResistantState.State.AUTO]: undefined,
+      }[state];
 }
 
 function convertFromObfuscationSettings(

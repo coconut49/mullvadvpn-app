@@ -10,7 +10,7 @@ msgstr ""
 "Project-Id-Version: mullvad-app\n"
 "Language-Team: Thai\n"
 "Language: th_TH\n"
-"PO-Revision-Date: 2022-07-12 06:30\n"
+"PO-Revision-Date: 2023-02-06 12:43\n"
 
 #. AU ADL
 msgid "Adelaide"
@@ -59,6 +59,10 @@ msgstr "เบลเกรด"
 #. US BOS
 msgid "Boston, MA"
 msgstr "บอสตัน รัฐแมสซาชูเซตส์"
+
+#. SK BTS
+msgid "Bratislava"
+msgstr "บราติสลาวา"
 
 #. BR
 msgid "Brazil"
@@ -111,6 +115,10 @@ msgstr "คลีฟแลนด์ รัฐโอไฮโอ"
 #. DK CPH
 msgid "Copenhagen"
 msgstr "โคเปนเฮเกน"
+
+#. HR
+msgid "Croatia"
+msgstr "โครเอเชีย"
 
 #. CZ
 msgid "Czech Republic"
@@ -183,6 +191,10 @@ msgstr "ฮ่องกง"
 #. US HNL
 msgid "Honolulu, HI"
 msgstr "โฮโนลูลู รัฐฮาวาย"
+
+#. US HOU
+msgid "Houston, TX"
+msgstr "ฮิวสตัน เท็กซัส"
 
 #. HU
 msgid "Hungary"
@@ -380,6 +392,10 @@ msgstr "รีกา"
 msgid "Romania"
 msgstr "โรมาเนีย"
 
+#. IT ROM
+msgid "Rome"
+msgstr "โรม"
+
 #. US SLC
 msgid "Salt Lake City, UT"
 msgstr "ซอลต์เลกซิตี รัฐยูทาห์"
@@ -420,6 +436,10 @@ msgstr "ซูฟอลส์ รัฐเซาท์ดาโคตา"
 msgid "Skopje"
 msgstr "สโกเปีย"
 
+#. SK
+msgid "Slovakia"
+msgstr "สโลวาเกีย"
+
 #. BG SOF
 msgid "Sofia"
 msgstr "โซเฟีย"
@@ -439,6 +459,10 @@ msgstr "เซนต์หลุยส์ รัฐมิสซูรี"
 #. US XLX
 msgid "Stamford, CT"
 msgstr "สแตมเฟิร์ด รัฐคอนเนตทิคัต"
+
+#. NO SVG
+msgid "Stavanger"
+msgstr "สตาวังเงอร์"
 
 #. SE STO
 msgid "Stockholm"
@@ -511,6 +535,10 @@ msgstr "วอชิงตัน ดี.ซี."
 #. AT VIE
 msgid "Wien"
 msgstr "วีน"
+
+#. HR ZAG
+msgid "Zagreb"
+msgstr "ซาเกร็บ"
 
 #. CH ZRH
 msgid "Zurich"

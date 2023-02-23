@@ -6,19 +6,17 @@
 //  Copyright © 2021 Mullvad VPN AB. All rights reserved.
 //
 
+import MullvadLogging
+import Operations
 import UIKit
-import Logging
 
 extension AddressCache {
-
     class Tracker {
         /// Shared instance.
-        static let shared: AddressCache.Tracker = {
-            return AddressCache.Tracker(
-                apiProxy: REST.ProxyFactory.shared.createAPIProxy(),
-                store: AddressCache.Store.shared
-            )
-        }()
+        static let shared = AddressCache.Tracker(
+            apiProxy: REST.ProxyFactory.shared.createAPIProxy(),
+            store: AddressCache.Store.shared
+        )
 
         /// Update interval (in seconds).
         private static let updateInterval: TimeInterval = 60 * 60 * 24
@@ -95,8 +93,7 @@ extension AddressCache {
 
         func updateEndpoints(
             completionHandler: ((OperationCompletion<Bool, Error>) -> Void)? = nil
-        ) -> Cancellable
-        {
+        ) -> Cancellable {
             let operation = ResultBlockOperation<Bool, Error> { operation in
                 guard self.nextScheduleDate() <= Date() else {
                     operation.finish(completion: .success(false))
@@ -142,12 +139,12 @@ extension AddressCache {
             defer { nslock.unlock() }
 
             switch completion {
-            case .success(let endpoints):
+            case let .success(endpoints):
                 store.setEndpoints(endpoints)
 
-            case .failure(let error):
+            case let .failure(error):
                 logger.error(
-                    chainedError: AnyChainedError(error),
+                    error: error,
                     message: "Failed to update address cache."
                 )
 
@@ -180,7 +177,8 @@ extension AddressCache {
 
                 let scheduleDate = self._nextScheduleDate()
 
-                self.logger.debug("Schedule next address cache update at \(scheduleDate.logFormatDate()).")
+                self.logger
+                    .debug("Schedule next address cache update at \(scheduleDate.logFormatDate()).")
 
                 self.scheduleEndpointsUpdate(startTime: .now() + scheduleDate.timeIntervalSinceNow)
             }
@@ -199,6 +197,5 @@ extension AddressCache {
 
             return max(nextDate, Date())
         }
-
     }
 }

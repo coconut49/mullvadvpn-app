@@ -1,5 +1,5 @@
 import { MacOsScrollbarVisibility } from '../../../shared/ipc-schema';
-import { IChangelog, ScrollPositions } from '../../../shared/ipc-types';
+import { IChangelog } from '../../../shared/ipc-types';
 
 export interface IUpdateLocaleAction {
   type: 'UPDATE_LOCALE';
@@ -20,22 +20,6 @@ export interface ISetWindowFocusedAction {
   focused: boolean;
 }
 
-export interface ISetScrollPositions {
-  type: 'SET_SCROLL_POSITIONS';
-  scrollPositions: ScrollPositions;
-}
-
-export interface IAddScrollPosition {
-  type: 'ADD_SCROLL_POSITION';
-  path: string;
-  scrollPosition: [number, number];
-}
-
-export interface IRemoveScrollPosition {
-  type: 'REMOVE_SCROLL_POSITION';
-  path: string;
-}
-
 export interface ISetMacOsScrollbarVisibility {
   type: 'SET_MACOS_SCROLLBAR_VISIBILITY';
   visibility: MacOsScrollbarVisibility;
@@ -44,6 +28,11 @@ export interface ISetMacOsScrollbarVisibility {
 export interface ISetConnectedToDaemon {
   type: 'SET_CONNECTED_TO_DAEMON';
   connectedToDaemon: boolean;
+}
+
+export interface ISetDaemonAllowed {
+  type: 'SET_DAEMON_ALLOWED';
+  daemonAllowed: boolean;
 }
 
 export interface ISetChangelog {
@@ -66,11 +55,9 @@ export type UserInterfaceAction =
   | IUpdateWindowArrowPositionAction
   | IUpdateConnectionInfoOpenAction
   | ISetWindowFocusedAction
-  | ISetScrollPositions
-  | IAddScrollPosition
-  | IRemoveScrollPosition
   | ISetMacOsScrollbarVisibility
   | ISetConnectedToDaemon
+  | ISetDaemonAllowed
   | ISetChangelog
   | ISetForceShowChanges
   | ISetIsPerformingPostUpgrade;
@@ -102,28 +89,6 @@ function setWindowFocused(focused: boolean): ISetWindowFocusedAction {
   };
 }
 
-function setScrollPositions(scrollPositions: ScrollPositions): ISetScrollPositions {
-  return {
-    type: 'SET_SCROLL_POSITIONS',
-    scrollPositions,
-  };
-}
-
-function addScrollPosition(path: string, scrollPosition: [number, number]): IAddScrollPosition {
-  return {
-    type: 'ADD_SCROLL_POSITION',
-    path,
-    scrollPosition,
-  };
-}
-
-function removeScrollPosition(path: string): IRemoveScrollPosition {
-  return {
-    type: 'REMOVE_SCROLL_POSITION',
-    path,
-  };
-}
-
 function setMacOsScrollbarVisibility(
   visibility: MacOsScrollbarVisibility,
 ): ISetMacOsScrollbarVisibility {
@@ -137,6 +102,13 @@ function setConnectedToDaemon(connectedToDaemon: boolean): ISetConnectedToDaemon
   return {
     type: 'SET_CONNECTED_TO_DAEMON',
     connectedToDaemon,
+  };
+}
+
+function setDaemonAllowed(daemonAllowed: boolean): ISetDaemonAllowed {
+  return {
+    type: 'SET_DAEMON_ALLOWED',
+    daemonAllowed,
   };
 }
 
@@ -166,11 +138,9 @@ export default {
   updateWindowArrowPosition,
   toggleConnectionPanel,
   setWindowFocused,
-  setScrollPositions,
-  addScrollPosition,
-  removeScrollPosition,
   setMacOsScrollbarVisibility,
   setConnectedToDaemon,
+  setDaemonAllowed,
   setChangelog,
   setForceShowChanges,
   setIsPerformingPostUpgrade,

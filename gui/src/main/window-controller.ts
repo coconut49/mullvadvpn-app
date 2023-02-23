@@ -15,8 +15,10 @@ interface IWindowPositioning {
   getWindowShapeParameters(window: BrowserWindow): IWindowShapeParameters;
 }
 
-// Tray applications are positioned aproximately 10px from the tray in Windows 11.
-const MARGIN = isWindows11OrNewer() ? 10 : 0;
+export interface WindowControllerDelegate {
+  getTrayBounds: Tray['getBounds'];
+  isUnpinnedWindow(): boolean;
+}
 
 class StandaloneWindowPositioning implements IWindowPositioning {
   public getPosition(window: BrowserWindow): IPosition {
@@ -39,15 +41,11 @@ class StandaloneWindowPositioning implements IWindowPositioning {
 }
 
 class AttachedToTrayWindowPositioning implements IWindowPositioning {
-  private tray: Tray;
-
-  constructor(tray: Tray) {
-    this.tray = tray;
-  }
+  constructor(private delegate: WindowControllerDelegate) {}
 
   public getPosition(window: BrowserWindow): IPosition {
     const windowBounds = window.getBounds();
-    const trayBounds = this.tray.getBounds();
+    const trayBounds = this.delegate.getTrayBounds();
 
     const activeDisplay = screen.getDisplayNearestPoint({
       x: trayBounds.x,
@@ -58,27 +56,29 @@ class AttachedToTrayWindowPositioning implements IWindowPositioning {
     const maxX = workArea.x + workArea.width - windowBounds.width;
     const maxY = workArea.y + workArea.height - windowBounds.height;
 
+    const margin = this.getWindowMargin();
+
     let x = 0;
     let y = 0;
 
     switch (placement) {
       case 'top':
         x = trayBounds.x + (trayBounds.width - windowBounds.width) * 0.5;
-        y = workArea.y + MARGIN;
+        y = workArea.y + margin;
         break;
 
       case 'bottom':
         x = trayBounds.x + (trayBounds.width - windowBounds.width) * 0.5;
-        y = workArea.y + workArea.height - windowBounds.height - MARGIN;
+        y = workArea.y + workArea.height - windowBounds.height - margin;
         break;
 
       case 'left':
-        x = workArea.x + MARGIN;
+        x = workArea.x + margin;
         y = trayBounds.y + (trayBounds.height - windowBounds.height) * 0.5;
         break;
 
       case 'right':
-        x = workArea.width - windowBounds.width - MARGIN;
+        x = workArea.width - windowBounds.width - margin;
         y = trayBounds.y + (trayBounds.height - windowBounds.height) * 0.5;
         break;
 
@@ -98,7 +98,7 @@ class AttachedToTrayWindowPositioning implements IWindowPositioning {
   }
 
   public getWindowShapeParameters(window: BrowserWindow): IWindowShapeParameters {
-    const trayBounds = this.tray.getBounds();
+    const trayBounds = this.delegate.getTrayBounds();
     const windowBounds = window.getBounds();
     const arrowPosition = trayBounds.x - windowBounds.x + trayBounds.width * 0.5;
     return {
@@ -131,6 +131,17 @@ class AttachedToTrayWindowPositioning implements IWindowPositioning {
         return 'none';
     }
   }
+
+  private getWindowMargin() {
+    if (isWindows11OrNewer()) {
+      // Tray applications are positioned aproximately 10px from the tray in Windows 11.
+      return 10;
+    } else if (process.platform === 'darwin') {
+      return 5;
+    } else {
+      return 0;
+    }
+  }
 }
 
 export default class WindowController {
@@ -148,12 +159,12 @@ export default class WindowController {
     return this.webContentsValue.isDestroyed() ? undefined : this.webContentsValue;
   }
 
-  constructor(windowValue: BrowserWindow, tray: Tray, private unpinnedWindow: boolean) {
+  constructor(private delegate: WindowControllerDelegate, windowValue: BrowserWindow) {
     this.windowValue = windowValue;
     this.webContentsValue = windowValue.webContents;
-    this.windowPositioning = unpinnedWindow
+    this.windowPositioning = delegate.isUnpinnedWindow()
       ? new StandaloneWindowPositioning()
-      : new AttachedToTrayWindowPositioning(tray);
+      : new AttachedToTrayWindowPositioning(delegate);
 
     this.installDisplayMetricsHandler();
     this.installHideHandler();
@@ -185,8 +196,9 @@ export default class WindowController {
 
   public updatePosition() {
     if (this.window) {
-      const { x, y } = this.windowPositioning.getPosition(this.window);
-      this.window.setPosition(x, y, false);
+      const position = this.windowPositioning.getPosition(this.window);
+      const size = WindowController.getContentSize(this.delegate.isUnpinnedWindow());
+      this.window.setBounds({ ...position, ...size }, false);
     }
 
     this.notifyUpdateWindowShape();
@@ -239,7 +251,7 @@ export default class WindowController {
     if (this.window) {
       const shapeParameters = this.windowPositioning.getWindowShapeParameters(this.window);
 
-      IpcMainEventChannel.window.notifyShape(this.webContentsValue, shapeParameters);
+      IpcMainEventChannel.window.notifyShape?.(shapeParameters);
     }
   }
 
@@ -282,7 +294,7 @@ export default class WindowController {
   }
 
   private forceResizeWindow() {
-    const { width, height } = WindowController.getContentSize(this.unpinnedWindow);
+    const { width, height } = WindowController.getContentSize(this.delegate.isUnpinnedWindow());
     this.window?.setContentSize(width, height);
   }
 
@@ -303,19 +315,10 @@ export default class WindowController {
     const contentHeight = 568;
 
     switch (process.platform) {
-      case 'darwin': {
-        // The size of transparent area around arrow on macOS.
-        const headerBarArrowHeight = 12;
-
-        return unpinnedWindow ? contentHeight : contentHeight + headerBarArrowHeight;
-      }
       case 'win32':
         // On Windows the app height ends up slightly lower than we set it to if running in unpinned
         // mode and the app becomes a tiny bit taller when pinned to task bar.
-        return unpinnedWindow ? contentHeight + 19 : contentHeight - 1;
-      case 'linux':
-        // On Linux the app ends up slightly lower than we set it to.
-        return contentHeight - 25;
+        return unpinnedWindow ? contentHeight + 25 : contentHeight;
       default:
         return contentHeight;
     }

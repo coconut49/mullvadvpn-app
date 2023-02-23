@@ -3,7 +3,14 @@ import { sprintf } from 'sprintf-js';
 import { strings } from '../../config.json';
 import { messages } from '../../shared/gettext';
 import { TunnelState } from '../daemon-rpc-types';
-import { InAppNotification, InAppNotificationProvider } from './notification';
+import {
+  InAppNotification,
+  InAppNotificationProvider,
+  SystemNotification,
+  SystemNotificationCategory,
+  SystemNotificationProvider,
+  SystemNotificationSeverityType,
+} from './notification';
 
 interface BlockWhenDisconnectedNotificationContext {
   tunnelState: TunnelState;
@@ -11,7 +18,8 @@ interface BlockWhenDisconnectedNotificationContext {
   hasExcludedApps: boolean;
 }
 
-export class BlockWhenDisconnectedNotificationProvider implements InAppNotificationProvider {
+export class BlockWhenDisconnectedNotificationProvider
+  implements InAppNotificationProvider, SystemNotificationProvider {
   public constructor(private context: BlockWhenDisconnectedNotificationContext) {}
 
   public mayDisplay() {
@@ -22,8 +30,22 @@ export class BlockWhenDisconnectedNotificationProvider implements InAppNotificat
     );
   }
 
+  public getSystemNotification(): SystemNotification {
+    const message = messages.pgettext('notifications', 'Lockdown mode active, connection blocked');
+
+    return {
+      message,
+      severity: SystemNotificationSeverityType.info,
+      category: SystemNotificationCategory.tunnelState,
+    };
+  }
+
   public getInAppNotification(): InAppNotification {
-    let subtitle = messages.pgettext('in-app-notifications', '"Always require VPN" is enabled.');
+    const lockdownModeSettingName = messages.pgettext('vpn-settings-view', 'Lockdown mode');
+    let subtitle = sprintf(
+      messages.pgettext('in-app-notifications', '"%(lockdownModeSettingName)s" is enabled.'),
+      { lockdownModeSettingName },
+    );
     if (this.context.hasExcludedApps) {
       subtitle = `${subtitle} ${sprintf(
         messages.pgettext(

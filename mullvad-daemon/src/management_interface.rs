@@ -111,12 +111,6 @@ impl ManagementService for ManagementServiceImpl {
         Ok(Response::new(()))
     }
 
-    async fn shutdown(&self, _: Request<()>) -> ServiceResult<()> {
-        log::debug!("shutdown");
-        self.send_command_to_daemon(DaemonCommand::Shutdown)?;
-        Ok(Response::new(()))
-    }
-
     async fn factory_reset(&self, _: Request<()>) -> ServiceResult<()> {
         #[cfg(not(target_os = "android"))]
         {
@@ -351,11 +345,16 @@ impl ManagementService for ManagementServiceImpl {
             .map_err(map_settings_error)
     }
 
-    async fn set_quantum_resistant_tunnel(&self, request: Request<bool>) -> ServiceResult<()> {
-        let enable = request.into_inner();
-        log::debug!("set_quantum_resistant_tunnel({})", enable);
+    async fn set_quantum_resistant_tunnel(
+        &self,
+        request: Request<types::QuantumResistantState>,
+    ) -> ServiceResult<()> {
+        let state = mullvad_types::wireguard::QuantumResistantState::try_from(request.into_inner())
+            .map_err(map_protobuf_type_err)?;
+
+        log::debug!("set_quantum_resistant_tunnel({state:?})");
         let (tx, rx) = oneshot::channel();
-        self.send_command_to_daemon(DaemonCommand::SetQuantumResistantTunnel(tx, enable))?;
+        self.send_command_to_daemon(DaemonCommand::SetQuantumResistantTunnel(tx, state))?;
         self.wait_for_result(rx)
             .await?
             .map(Response::new)
@@ -493,10 +492,7 @@ impl ManagementService for ManagementServiceImpl {
                     }),
                 })
             })
-            .map_err(|error| match error {
-                crate::Error::RestError(error) => map_rest_voucher_error(error),
-                error => map_daemon_error(error),
-            })
+            .map_err(map_daemon_error)
     }
 
     // Device management
@@ -954,6 +950,7 @@ fn map_daemon_error(error: crate::Error) -> Status {
         DaemonError::ListDevicesError(error) => map_device_error(&error),
         DaemonError::RemoveDeviceError(error) => map_device_error(&error),
         DaemonError::UpdateDeviceError(error) => map_device_error(&error),
+        DaemonError::VoucherSubmission(error) => map_device_error(&error),
         #[cfg(windows)]
         DaemonError::SplitTunnelError(error) => map_split_tunnel_error(error),
         DaemonError::AccountHistory(error) => map_account_history_error(error),
@@ -981,22 +978,6 @@ fn map_split_tunnel_error(error: talpid_core::split_tunnel::Error) -> Status {
     }
 }
 
-/// Converts a REST API voucher error into a tonic status.
-fn map_rest_voucher_error(error: RestError) -> Status {
-    match error {
-        RestError::ApiError(StatusCode::BAD_REQUEST, message) => match &message.as_str() {
-            &mullvad_api::INVALID_VOUCHER => Status::new(Code::NotFound, INVALID_VOUCHER_MESSAGE),
-
-            &mullvad_api::VOUCHER_USED => {
-                Status::new(Code::ResourceExhausted, USED_VOUCHER_MESSAGE)
-            }
-
-            error => Status::unknown(format!("Voucher error: {}", error)),
-        },
-        error => map_rest_error(&error),
-    }
-}
-
 /// Converts a REST API error into a tonic status.
 fn map_rest_error(error: &RestError) -> Status {
     match error {
@@ -1007,7 +988,7 @@ fn map_rest_error(error: &RestError) -> Status {
         }
         RestError::TimeoutError(_elapsed) => Status::deadline_exceeded("API request timed out"),
         RestError::HyperError(_) => Status::unavailable("Cannot reach the API"),
-        error => Status::unknown(format!("REST error: {}", error)),
+        error => Status::unknown(format!("REST error: {error}")),
     }
 }
 
@@ -1016,8 +997,7 @@ fn map_settings_error(error: settings::Error) -> Status {
     match error {
         settings::Error::DeleteError(..)
         | settings::Error::WriteError(..)
-        | settings::Error::ReadError(..)
-        | settings::Error::SetPermissions(..) => {
+        | settings::Error::ReadError(..) => {
             Status::new(Code::FailedPrecondition, error.to_string())
         }
         settings::Error::SerializeError(..) | settings::Error::ParseError(..) => {
@@ -1034,6 +1014,8 @@ fn map_device_error(error: &device::Error) -> Status {
         device::Error::InvalidDevice | device::Error::NoDevice => {
             Status::new(Code::NotFound, error.to_string())
         }
+        device::Error::InvalidVoucher => Status::new(Code::NotFound, INVALID_VOUCHER_MESSAGE),
+        device::Error::UsedVoucher => Status::new(Code::ResourceExhausted, USED_VOUCHER_MESSAGE),
         device::Error::DeviceIoError(ref _error) => {
             Status::new(Code::Unavailable, error.to_string())
         }
